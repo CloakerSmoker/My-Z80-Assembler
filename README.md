@@ -8,9 +8,7 @@ Some small things to note:
 * I haven't verified that most instructions are actually generated correctly
 * This is just for fun
 
-Now, some big-ish things to note:
-
----
+## Some big-ish things to note
 
 This assembler does not depend on whitespace for parsing, which means you can write any number of instructions/labels/directives on a single line.
 However, this has the downside of requiring an extra comma before the first operand of any instruction which takes operands.
@@ -34,23 +32,25 @@ This assembler uses `!` as a prefix for directives, and only supports three dire
 
 | Directive name/parameters | Usage |
 |---------------------------|-------|
-| `!org [Short]` | Seeks to address `Short` inside of the assembler's virtual Z80 address space. This means that any instructions/data following this directive will expect to be loaded after the address given. |
-| `!db [Byte]` | Will write `Byte`'s value as a raw byte to the next position in the assembler's virtual Z80 memory. |
-| `!dw [Short]` | Same as `!db`, but with a 16 bit value instead of an 8 bit one. |
+| `!org Short` | Seeks to address `Short` inside of the assembler's virtual Z80 address space. This means that any instructions/data following this directive will expect to be loaded after the address given. |
+| `!db Byte` | Will write `Byte`'s value as a raw byte to the next position in the assembler's virtual Z80 memory. |
+| `!dw Short` | Same as `!db`, but with a 16 bit value instead of an 8 bit one. |
 
 ---
 
-The assembler should be invoked as `Z80.exe [InputFile] [OutputFile]` on Windows, and `./Z80.elf [InputFile] [OutputFile]` on Linux.
+The assembler should be invoked as `Z80.exe InputFile OutputFile` on Windows, and `./Z80.elf InputFile OutputFile` on Linux.
 
-`[InputFile]` should be the path to an input file containing instructions, labels, and directives, and `[OutputFile]` should be a path to a file which will have the encoded instructions written to it.
+`InputFile` should be the path to an input file containing instructions, labels, and directives, and `OutputFile` should be a path to a file which will have the encoded instructions written to it.
 
 ---
 
 Some registers have slightly different names. The big one is that `(hl)` when used in place of `a`/`b` (or any 8 bit register) should be written as `(hlb)`. This is because `(hl)` in a majority of contexts means `the 16 bits in memory at the address inside of hl`, and not `the 8 bits in...`.
 
-I'm not sure how other assemblers solve this problem, but due to the way I wrote this assembler, I would have to allow `ld, a, (bc)`/`ld, a, (de)`/`ld, a, (sp)` in order to allow `ld, a, (hl)`. 3 of which are invalid, and I consider one special case better than 3 invalid cases.
+I'm not sure how other assemblers solve this problem, but due to the way I wrote this assembler, I would have to allow `ld, a, (bc)`/`ld, a, (de)`/`ld, a, (sp)` in order to allow `ld, a, (hl)`. 3 of which are invalid, and I consider one non-standard name better than allowing 3 different ways to generate invalid instructions.
 
 Additionally, some of the "undocumented" instructions involving `ixl`/`ixh`/`iyl`/`iyh` are implemented, so those registers are also valid.
+
+Hopefully this will be incorrect by the time anyone reads this, but I also haven't implemented `(ix+N)` or `(iy+N)` addressing yet.
 
 ---
 
@@ -68,7 +68,7 @@ ld, a, 0
 
 Increment:
     inc, a
-    ld, (hl), a
+    ld, (hlb), a
     jp, Increment
 
 Counter: !db 0
