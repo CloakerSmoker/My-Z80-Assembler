@@ -1,0 +1,773 @@
+#Require "./src/lib/Memory.rlx"
+#Require "./src/lib/File.rlx"
+#Require "./src/lib/Console.rlx"
+#Require "./src/lib/SafeString.rlx"
+#Require "./src/lib/HashMap.rlx"
+#Require "./src/lib/Debug.rlx"
+
+#Require "./src/compiler/Lexer.rlx"
+
+; Symbolic register numbers/types for matching written instructions to actual opcodes
+
+i32 Z80_R_B 		:= 0x00_0001
+i32 Z80_R_C 		:= 0x00_0002
+i32 Z80_R_D 		:= 0x00_0004
+i32 Z80_R_E 		:= 0x00_0008
+i32 Z80_R_H 		:= 0x00_0010
+i32 Z80_R_L 		:= 0x00_0020
+i32 Z80_RI_HL 		:= 0x00_0040
+i32 Z80_R_A 		:= 0x00_0080
+
+i32 Z80_R 			:= 0x00_00FF
+
+i32 Z80_RP_BC 		:= 0x00_0100
+i32 Z80_RP_DE 		:= 0x00_0200
+i32 Z80_RP_HL 		:= 0x00_0400
+i32 Z80_RP_SP 		:= 0x00_0800
+
+i32 Z80_RP 			:= 0x00_0F00
+
+i32 Z80_RPI_BC 		:= 0x00_1000
+i32 Z80_RPI_DE 		:= 0x00_2000
+i32 Z80_RPI_HL 		:= 0x00_4000
+i32 Z80_RPI_SP 		:= 0x00_8000
+
+i32 Z80_RPI			:= 0x00_F000
+
+i32 Z80_RP2_AF 		:= 0x01_0000
+i32 Z80_RP2I_AF 	:= 0x02_0000
+
+i32 Z80_RP2			:= 0x01_0700
+i32 Z80_RP2I		:= 0x02_7000	; RPI - Z80_RPI_SP, since Z80_RPI_SP means Z80_RP2I_AF in the context of an RP2 instruction
+
+i32 Z80_I			:= 0x04_0000
+i32 Z80_I8 			:= 0x04_0000
+i32 Z80_I16 		:= 0x04_0000
+i32 Z80_I16I 		:= 0x10_0000
+
+i32 Z80_IRV			:= 0x20_0000	; I register, interupt vector
+i32 Z80_RFC			:= 0x40_0000	; R register, refresh counter
+
+i32 Z80_IX			:= 0x80_0000
+i32 Z80_IY		   := 0x100_0000
+
+i32 Z80_IXL		   := 0x200_0000
+i32 Z80_IXH		   := 0x400_0000
+i32 Z80_IYL		   := 0x800_0000
+i32 Z80_IYH		  := 0x1000_0000
+
+; Flags an instruction defines to have a certain operand's register number placed into an opcode field
+
+i32 Z80_P_IS_OP1 := 0x001
+i32 Z80_Y_IS_OP1 := 0x002
+i32 Z80_Z_IS_OP1 := 0x004
+i32 Z80_I_IS_OP1 := 0x008
+
+i32 Z80_P_IS_OP2 := 0x010
+i32 Z80_Y_IS_OP2 := 0x020
+i32 Z80_Z_IS_OP2 := 0x040
+i32 Z80_I_IS_OP2 := 0x080
+
+; Flags to push a immediate value after the instruction
+
+i32 Z80_HAS_I8 	:= 0x100
+i32 Z80_HAS_I16	:= 0x200
+
+; Flags for prefix bytes
+
+i32 Z80_PREFIX_ED := 0x1000
+i32 Z80_PREFIX_CB := 0x2000
+i32 Z80_PREFIX_DD := 0x4000
+i32 Z80_PREFIX_FD := 0x8000
+
+; Opcode bit field masks
+
+i8 Z80_OPCODE_MASK_X := 0b11_000_000
+i8 Z80_OPCODE_MASK_Y := 0b00_111_000
+i8 Z80_OPCODE_MASK_P := 0b00_110_000
+i8 Z80_OPCODE_MASK_Q := 0b00_001_000
+i8 Z80_OPCODE_MASK_Z := 0b00_000_111
+
+; Instruction definition, holds the operand types/opcode/flags which define a single actual instruction
+
+struct Z80Instruction {
+	union {
+		i32{2} Operands
+		i64 PackedOperands
+	}
+	
+	i16 Opcode
+	i32 Flags
+	
+	Z80Instruction* Next
+	
+	define void Print() {
+		Print("Opcode %x\n", this->Opcode)
+	}
+}
+
+i8 Z80_REGISTER_B	:= 0
+i8 Z80_REGISTER_C	:= 1
+i8 Z80_REGISTER_D 	:= 2
+i8 Z80_REGISTER_E 	:= 3
+i8 Z80_REGISTER_H 	:= 4
+i8 Z80_REGISTER_L 	:= 5
+i8 Z80_REGISTER_HLI := 6
+i8 Z80_REGISTER_A 	:= 7
+
+i8 Z80_REGISTER_BC	:= 0
+i8 Z80_REGISTER_DE	:= 1
+i8 Z80_REGISTER_HL	:= 2
+i8 Z80_REGISTER_SP	:= 3
+i8 Z80_REGISTER_AF	:= 3
+
+; These values are made up so `Z80Assembler.LookupRegister` will output the correct type for the I/R/IX/IY registers
+
+i8 Z80_REGISTER_I := 21
+i8 Z80_REGISTER_R := 22
+
+i8 Z80_REGISTER_IX := 23
+i8 Z80_REGISTER_IY := 24
+
+i8 Z80_REGISTER_IXL	:= 25
+i8 Z80_REGISTER_IXH	:= 26
+i8 Z80_REGISTER_IYL := 27
+i8 Z80_REGISTER_IYH := 28
+
+struct Z80InstructionNode {
+	Z80Instruction* Base
+	
+	i32 OperandCount
+	
+	union {
+		i32{2} Operands
+	}
+	
+	i64 PackedOperands
+}
+
+i32 Z80_MEMORY_SIZE := 0x1_0000
+
+struct Z80Assembler {
+	HashMap Instructions
+	HashMap Registers
+	
+	LexerState* Lexer
+	
+	declare void LoadInstructions(i8*)
+	
+	i32 MemoryIndex
+	
+	union {
+		void* Memory
+		i8* MemoryBytes
+	}
+	
+	i16* LabelPositions
+	i32* LabelReferences
+	
+	i32 LabelPositionCount
+	i32 LabelReferenceCount
+	
+	HashMap* LabelNameToIndex
+	
+	static Z80Assembler* New(i8* InstructionListing, i8* SourceText) {
+		Z80Assembler* this := Alloc(#Z80Assembler)
+		
+		this->LoadInstructions(InstructionListing)
+		
+		HashMap* Registers := this~>Registers
+		
+		Registers->Initialize()
+		Registers->IgnoreCase := true
+		
+		Registers->Set("a", Z80_REGISTER_A)
+		Registers->Set("b", Z80_REGISTER_B)
+		Registers->Set("c", Z80_REGISTER_C)
+		Registers->Set("d", Z80_REGISTER_D)
+		Registers->Set("e", Z80_REGISTER_E)
+		Registers->Set("h", Z80_REGISTER_H)
+		Registers->Set("l", Z80_REGISTER_L)
+		Registers->Set("hlb", Z80_REGISTER_HLI)
+		
+		Registers->Set("bc", Z80_REGISTER_BC)
+		Registers->Set("de", Z80_REGISTER_DE)
+		Registers->Set("hl", Z80_REGISTER_HL)
+		Registers->Set("sp", Z80_REGISTER_SP)
+		Registers->Set("af", Z80_REGISTER_AF)
+		
+		Registers->Set("i", Z80_REGISTER_I)
+		Registers->Set("r", Z80_REGISTER_R)
+		
+		Registers->Set("ix", Z80_REGISTER_IX)
+		Registers->Set("iy", Z80_REGISTER_IY)
+		
+		Registers->Set("ixl", Z80_REGISTER_IXL)
+		Registers->Set("ixh", Z80_REGISTER_IXH)
+		Registers->Set("iyl", Z80_REGISTER_IYL)
+		Registers->Set("iyh", Z80_REGISTER_IYH)
+		
+		
+		i32 Length := StringLength(SourceText)
+		this->Lexer := LexerState:New(Alloc(#BuildConfig), AToW(SourceText, Length), Length, AToS("N/A"))
+		
+		this->Memory := Alloc(Z80_MEMORY_SIZE)
+		
+		this->LabelPositions := Alloc(4)
+		this->LabelReferences := Alloc(4)
+		
+		this->LabelNameToIndex := HashMap:New()
+		
+		return this
+	}
+	
+	define void BuildSymbolMap(HashMap* M) {
+		M->Initialize()
+		M->IgnoreCase := true
+		
+		M->Set("_", 0)
+		
+		M->Set("a", Z80_R_A)
+		M->Set("b", Z80_R_B)
+		M->Set("c", Z80_R_C)
+		M->Set("d", Z80_R_D)
+		M->Set("e", Z80_R_E)
+		M->Set("h", Z80_R_H)
+		M->Set("l", Z80_R_L)
+		M->Set("hlb", Z80_RI_HL)
+		
+		M->Set("r", Z80_R)
+		
+		M->Set("bc", Z80_RP_BC)
+		M->Set("de", Z80_RP_DE)
+		M->Set("hl", Z80_RP_HL)
+		M->Set("sp", Z80_RP_SP)
+		
+		M->Set("rp", Z80_RP)
+		
+		M->Set("bci", Z80_RPI_BC)
+		M->Set("dei", Z80_RPI_DE)
+		M->Set("hli", Z80_RPI_HL)
+		M->Set("spi", Z80_RPI_SP)
+		
+		M->Set("rpi", Z80_RPI)
+		
+		M->Set("af", Z80_RP2_AF)
+		M->Set("afi", Z80_RP2I_AF)
+		
+		M->Set("rp2", Z80_RP2)
+		M->Set("rp2i", Z80_RP2I)
+		
+		M->Set("i8", Z80_I8)
+		M->Set("i16", Z80_I16)
+		M->Set("i16i", Z80_I16I)
+		
+		M->Set("irv", Z80_IRV)
+		M->Set("rfc", Z80_RFC)
+		
+		M->Set("ix", Z80_IX)
+		M->Set("iy", Z80_IY)
+		
+		M->Set("ixl", Z80_IXL)
+		M->Set("ixh", Z80_IXH)
+		M->Set("iyl", Z80_IYL)
+		M->Set("iyh", Z80_IYH)
+		
+		M->Set("P_IS_OP1", Z80_P_IS_OP1)
+		M->Set("Y_IS_OP1", Z80_Y_IS_OP1)
+		M->Set("Z_IS_OP1", Z80_Z_IS_OP1)
+		M->Set("I_IS_OP1", Z80_I_IS_OP1)
+		
+		M->Set("P_IS_OP2", Z80_P_IS_OP2)
+		M->Set("Y_IS_OP2", Z80_Y_IS_OP2)
+		M->Set("Z_IS_OP2", Z80_Z_IS_OP2)
+		M->Set("I_IS_OP2", Z80_I_IS_OP2)
+		
+		M->Set("IMM8", Z80_HAS_I8)
+		M->Set("IMM16", Z80_HAS_I16)
+		
+		M->Set("ED", Z80_PREFIX_ED)
+		M->Set("CB", Z80_PREFIX_CB)
+		M->Set("DD", Z80_PREFIX_DD)
+		M->Set("FD", Z80_PREFIX_FD)
+	}
+	
+	define i16 PackOpcode(i16 X, i16 Y, i16 Z) {
+		return ((X << 6) | (Y << 3) | Z) As i16
+	}
+	define i16 PackY(i16 P, i16 Q) {
+		return ((P << 1) | Q) As i16
+	}
+	define i32 RepackP(i16 Opcode, i16 NewP) {
+		return Opcode | (NewP << 4)
+	}
+	define i32 RepackY(i16 Opcode, i16 NewY) {
+		return Opcode | (NewY << 3)
+	}
+	define i32 RepackZ(i16 Opcode, i16 NewZ) {
+		return Opcode | NewZ
+	}
+	
+	define void LoadInstructions(i8* InstructionListing) {
+		i32 Length := StringLength(InstructionListing)
+		
+		LexerState* Lexer := LexerState:New(Alloc(#BuildConfig), AToW(InstructionListing, Length), Length, AToS("N/A")) 
+		
+		this->BuildSymbolMap(Lexer~>Keywords)
+		
+		HashMap* Instructions := this~>Instructions
+		
+		Instructions->Initialize()
+		Instructions->IgnoreCase := true
+		
+		loop {
+			Token* InstructionNameToken := Lexer->GetNextToken()
+			
+			if !(InstructionNameToken->Is(TOKEN_TYPE_IDENTIFIER)) {
+				break
+			}
+			
+			SafeWideString* InstructionName := InstructionNameToken->StringValue
+			
+			Z80Instruction* NewListHead := Alloc(#Z80Instruction)
+			
+			i8 X := Lexer->GetNextToken()->IntegerValue
+			Lexer->Consume(TOKEN_TYPE_OPERATOR, OPERATOR_PLUS, "Expected '+'")
+			i8 Z := Lexer->GetNextToken()->IntegerValue
+			Lexer->Consume(TOKEN_TYPE_OPERATOR, OPERATOR_PLUS, "Expected '+'")
+			i8 YOrQ := Lexer->GetNextToken()->IntegerValue
+			
+			if (Lexer->NextTokenMatches(TOKEN_TYPE_OPERATOR, OPERATOR_PLUS)) {
+				i8 P := Lexer->GetNextToken()->IntegerValue
+				
+				NewListHead->Opcode := this->PackOpcode(X, this->PackY(P, YOrQ), Z)
+			}
+			else {
+				NewListHead->Opcode := this->PackOpcode(X, YOrQ, Z)
+			}
+			
+			for (i8 OperandIndex := 0, OperandIndex < 2, OperandIndex += 1) {
+				NewListHead->PackedOperands |= Lexer->GetNextToken()->IntegerValue << ((OperandIndex * 32) As i8)
+				
+				if !(Lexer->NextTokenMatches(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_COMMA)) {
+					break
+				}
+			}
+			
+			i8 IsFirstOption := true
+			
+			while (IsFirstOption || Lexer->NextTokenMatches(TOKEN_TYPE_OPERATOR, OPERATOR_OR)) {
+				NewListHead->Flags |= Lexer->GetNextToken()->IntegerValue
+				
+				IsFirstOption := false
+			}
+			
+			;InstructionName->Print()
+			;Print("	{ Opcode: %x,		Flags: %x, 	Operands: %x }\n", NewListHead->Opcode, NewListHead->Flags, NewListHead->PackedOperands)
+			
+			
+			HashMapElement* OldListHeadElement := Instructions->Get(InstructionName)
+			
+			if (OldListHeadElement != null) {
+				Z80Instruction* OldListHead := OldListHeadElement->Value
+				
+				;Print("		NH: %x		OLH: %x		NLH: %x		OLHN: %x\n", Instructions->HashString(InstructionName), OldListHead, NewListHead, OldListHead->Next)
+				
+				NewListHead->Next := OldListHead->Next
+				OldListHead->Next := NewListHead
+			}
+			else {
+				;Print("		NH: %x		OLH: 0x0		NLH: %x\n", Instructions->HashString(InstructionName), NewListHead)
+				
+				Instructions->Set(InstructionName, NewListHead)
+			}
+		}
+	}
+	
+	define Z80Instruction* LookupInstruction(SafeWideString* Name, i64 PackedOperands) {
+		;Name->Print()
+		;Print(" looking for %x\n", PackedOperands)
+		
+		HashMapElement* ListHeadElement := this~>Instructions->Get(Name)
+		
+		if !(ListHeadElement) {
+			return null
+		}
+		
+		Z80Instruction* ListHead := ListHeadElement->Value As Z80Instruction*
+		
+		while (ListHead) {
+			;Print("	%x: %x\n", ListHead, ListHead->PackedOperands)
+			
+			if (PackedOperands = 0) {
+				if (ListHead->PackedOperands = 0) {
+					return ListHead
+				}
+			}
+			else if (ListHead->PackedOperands & PackedOperands = PackedOperands) {
+				return ListHead
+			}
+			
+			ListHead := ListHead->Next
+		}
+		
+		return null
+	}
+	
+	define i8 LookupRegister(Token* RegisterToken, i32* OutType) {
+		SafeWideString* RegisterName := RegisterToken->StringValue
+		
+		HashMapElement* FoundRegisterElement := this~>Registers->Get(RegisterName)
+		
+		if !(FoundRegisterElement) {
+			*OutType := 0
+			return 0
+		}
+		
+		i8 FoundRegisterNumber := FoundRegisterElement->Value As i8
+		i32 FoundRegisterType := 1 << FoundRegisterNumber
+		
+		if (RegisterName->Length = 2 && FoundRegisterNumber < 4) {
+			; FoundRegisterNumber is 0-3, aka BC-SP (the RP range), so shift left by 8 to get a register type
+			
+			if (RegisterName->Equals("af")) {
+				*OutType := Z80_RP2_AF
+			}
+			else {
+				*OutType := FoundRegisterType << 8
+			}
+		}
+		else {
+			*OutType := FoundRegisterType
+		}
+		
+		;RegisterName->Print()
+		;Print(" is type %x, value %x\n", *OutType, FoundRegisterNumber)
+		
+		return FoundRegisterNumber
+	}
+	
+	define i32 FindOrAddLabel(Token* LabelNameToken, i8 Find) {		
+		i32 Index := this->LabelPositionCount
+		
+		HashMapElement* LabelElement := this->LabelNameToIndex->Get(LabelNameToken->StringValue)
+		
+		if (LabelElement != null) {
+			Index := LabelElement->Value
+			
+			i32 LabelValue := this->LabelPositions[Index]
+			
+			if (LabelValue != 0x7FFF && Find = false) {
+				LabelNameToken->Error("Duplicate label definition")
+			}
+		}
+		else {
+			this->LabelPositionCount += 1
+			this->LabelPositions := ReAlloc(this->LabelPositions, this->LabelPositionCount * #i16)
+			
+			this->LabelNameToIndex->Set(LabelNameToken->StringValue, Index)
+			
+			this->LabelPositions[Index] := 0x7FFF
+		}
+		
+		if !(Find) {
+			this->LabelPositions[Index] := this->MemoryIndex
+		}
+		
+		return Index
+	}
+	
+	define i32 MakeLabelReference(Token* LabelNameToken) {
+		i32 Index := this->FindOrAddLabel(LabelNameToken, true)
+		
+		return 0x1_0000 | (Index << 17)
+	}
+	
+	define i64 ParseOperand() {
+		i32 Type := 0
+		i32 Value := 0
+		
+		if (this->Lexer->NextTokenMatches(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_OPEN_PAREN)) {
+			Token* IndirectToken := this->Lexer->GetNextToken()
+			
+			this->Lexer->Consume(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_CLOSE_PAREN, "Expected ')' after indirect operand")
+			
+			if (IndirectToken->Is(TOKEN_TYPE_INTEGER)) {
+				Type := Z80_I16I
+				Value := IndirectToken->IntegerValue As i32
+			}
+			else if (IndirectToken->Is(TOKEN_TYPE_IDENTIFIER)) {
+				i8 IndirectRegister := this->LookupRegister(IndirectToken, &Type)
+				
+				if (Type = 0) {
+					Type := Z80_I16I
+					Value := this->MakeLabelReference(IndirectToken)
+				}
+				else {
+					if (Type & Z80_R) {
+						if (IndirectRegister != Z80_REGISTER_HLI) {
+							IndirectToken->Error("Invalid register for indirect operand")
+						}
+					}
+					else {
+						; rp -> rpi
+						Type := Type << 4
+					}
+					
+					Value := IndirectRegister
+				}
+			}
+		}
+		else {
+			Token* OperandToken := this->Lexer->GetNextToken()
+			
+			if (OperandToken->Is(TOKEN_TYPE_IDENTIFIER)) {
+				Value := this->LookupRegister(OperandToken, &Type)
+				
+				if (Type = 0) {
+					Type := Z80_I
+					Value := this->MakeLabelReference(OperandToken)
+				}
+			}
+			else if (OperandToken->Is(TOKEN_TYPE_INTEGER)) {
+				Type := Z80_I
+				Value := OperandToken->IntegerValue As i32
+			}
+		}
+		
+		;Print("Type = %x\n", Type)
+		;Print("Value = %x\n", Value)
+		
+		return (Type As i64 << 32) | Value
+	}
+	
+	define Z80InstructionNode* ParseInstruction(Token* FirstToken) {
+		Z80InstructionNode* Result := Alloc(#Z80InstructionNode)
+		
+		i32 OperandCount := 0
+		i64 OperandTypes := 0
+		
+		if (FirstToken->Is(TOKEN_TYPE_IDENTIFIER)) {
+			while (this->Lexer->NextTokenMatches(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_COMMA)) {
+				i64 NextOperand := this->ParseOperand()
+				
+				;Print("Operands[%i] = %x\n", OperandCount, NextOperand)
+				
+				Result~>Operands[OperandCount] := NextOperand & 0xFFFF_FFFF
+				OperandTypes |= (NextOperand >> 32) << ((OperandCount * 32) As i8)
+				
+				OperandCount += 1
+			}
+			
+			Result->PackedOperands := OperandTypes
+			Result->Base := this->LookupInstruction(FirstToken->StringValue, OperandTypes)
+			
+			if !(Result->Base) {
+				FirstToken->Error("No instruction matches operand types")
+			}
+		}
+		
+		return Result
+	}
+	
+	declare void AssembleInstruction(Z80InstructionNode*)
+	declare void AppendI8(i32)
+	declare void AppendI16(i32)
+	
+	define void ParseProgram() {
+		loop {
+			if (this->Lexer->AtEnd()) {
+				break
+			}
+			
+			Token* FirstToken := this->Lexer->GetNextToken()
+			
+			if (FirstToken->Is(TOKEN_TYPE_EOF)) {
+				break
+			}
+			else if (FirstToken->Is(TOKEN_TYPE_OPERATOR, OPERATOR_BANG)) {
+				Token* DirectiveNameToken := this->Lexer->Consume(TOKEN_TYPE_IDENTIFIER, "Expected directive name")
+				
+				SafeWideString* DirectiveName := DirectiveNameToken->StringValue
+				
+				if (DirectiveName->Equals("org")) {
+					Token* NewMemoryIndexToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected new org address")
+					i64 NewMemoryIndex := NewMemoryIndexToken->IntegerValue
+					
+					if (NewMemoryIndex > 0xFFFF) {
+						NewMemoryIndexToken->Error("Org address out of bounds")
+					}
+					
+					this->MemoryIndex := NewMemoryIndex
+				}
+				else if (DirectiveName->Equals("db")) {
+					Token* ByteToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected 'db' value")
+					i32 Byte := ByteToken->IntegerValue
+					
+					if (Byte > 0xFF) {
+						ByteToken->Error("'db' value must fit in a single byte")
+					}
+					
+					this->AppendI8(Byte)
+				}
+				else if (DirectiveName->Equals("dw")) {
+					Token* WordToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected 'dw' value")
+					i32 Word := WordToken->IntegerValue
+					
+					if (Word > 0xFFFF) {
+						WordToken->Error("'dw' value must fit in a single word")
+					}
+					
+					this->AppendI16(Word)
+				}
+			}
+			else if (FirstToken->Is(TOKEN_TYPE_IDENTIFIER)) {
+				if (this->Lexer->NextTokenMatches(TOKEN_TYPE_OPERATOR, OPERATOR_COLON)) {
+					this->FindOrAddLabel(FirstToken, false)
+				}
+				else {
+					this->AssembleInstruction(this->ParseInstruction(FirstToken))
+				}
+			}
+		}
+	}
+	
+	define void EnsureCapacity() {
+		if (this->MemoryIndex + 1 >= Z80_MEMORY_SIZE) {
+			this->MemoryIndex := 0
+		}
+	}
+	
+	define void AppendI8(i32 Value) {
+		this->EnsureCapacity()
+		
+		this->MemoryBytes[this->MemoryIndex] := Value & 0xFF
+		this->MemoryIndex += 1
+	}
+	define void AppendI16(i32 Value) {
+		this->AppendI8(Value & 0xFF)
+		this->AppendI8(Value >> 8)
+	}
+	
+	define void AppendImmediate(i8 IsI8, i16 Value) {
+		if (IsI8) {
+			this->AppendI8(Value)
+		}
+		else {
+			this->AppendI16(Value)
+		}
+	}
+	
+	define void MarkLabelReference(i32 LabelNumber) {
+		i32 Index := this->LabelReferenceCount
+		
+		this->LabelReferenceCount += 1
+		this->LabelReferences := ReAlloc(this->LabelReferences, this->LabelReferenceCount * #i32)
+		
+		this->LabelReferences[Index] := (LabelNumber << 16) | this->MemoryIndex
+	}
+	
+	define void AssembleInstruction(Z80InstructionNode* Instruction) {
+		Z80Instruction* Base := Instruction->Base
+		
+		i16 LeftOperand := Instruction~>Operands[0]
+		i16 RightOperand := Instruction~>Operands[1]
+		i16 Opcode := Base->Opcode
+		i16 Flags := Base->Flags
+		
+		;Print("\nOpcode: %x\nFlags: %x\n", Opcode, Flags)
+		;Print("Left = %x, Right = %x\n", LeftOperand, RightOperand)
+		
+		if 		(Flags & Z80_PREFIX_DD) { this->AppendI8(0xDD) }
+		else if (Flags & Z80_PREFIX_FD) { this->AppendI8(0xFD) }
+		else if (Flags & Z80_PREFIX_ED) { this->AppendI8(0xED) }
+		
+		if 		(Flags & Z80_PREFIX_CB) { this->AppendI8(0xCB) }
+		
+		if 		(Flags & Z80_P_IS_OP1) { Opcode := this->RepackP(Opcode, LeftOperand) }
+		else if (Flags & Z80_Y_IS_OP1) { Opcode := this->RepackY(Opcode, LeftOperand) }
+		else if (Flags & Z80_Z_IS_OP1) { Opcode := this->RepackZ(Opcode, LeftOperand) }
+		
+		if 		(Flags & Z80_P_IS_OP2) { Opcode := this->RepackP(Opcode, RightOperand) }
+		else if (Flags & Z80_Y_IS_OP2) { Opcode := this->RepackY(Opcode, RightOperand) }
+		else if (Flags & Z80_Z_IS_OP2) { Opcode := this->RepackZ(Opcode, RightOperand) }
+		
+		;Print("New Opcode: %x\n", Opcode)
+		
+		this->AppendI8(Opcode)
+		
+		for (i32 OperandIndex := 0, OperandIndex < 2, OperandIndex += 1) {
+			i32 NextOperand := Instruction~>Operands[OperandIndex]
+			i32 NextOperandType := Instruction->PackedOperands >> ((OperandIndex * 32) As i8)
+			
+			if (NextOperandType = Z80_I || NextOperandType = Z80_I16I) {
+				if (NextOperand & 0x1_0000) {
+					i32 LabelIndex := NextOperand >> 17
+					
+					this->MarkLabelReference(LabelIndex)
+				}
+			}
+		}
+		
+		i8 ImmediateIsI8 := !!(Flags & Z80_HAS_I8)
+		
+		if 		(Flags & Z80_I_IS_OP1) { this->AppendImmediate(ImmediateIsI8, LeftOperand) }
+		else if (Flags & Z80_I_IS_OP2) { this->AppendImmediate(ImmediateIsI8, RightOperand) }
+	}
+	
+	define void Link() {
+		for (i32 Index := 0, Index < this->LabelReferenceCount, Index += 1) {
+			i32 NextLabel := this->LabelReferences[Index]
+			
+			i32 TargetLabelIndex := NextLabel >> 16
+			i32 TargetPosition := NextLabel & 0xFFFF
+			
+			i32 TargetLabelPosition := this->LabelPositions[TargetLabelIndex]
+			
+			(this->Memory + TargetPosition As i16*)[0] := TargetLabelPosition
+		}
+	}
+	
+	define void Print() {
+		for (i32 Index := 0, Index < this->MemoryIndex, Index += 1) {
+			i8 Next := this->MemoryBytes[Index]
+			
+			PrintCharacter(NumberToCharacter((Next >> 4) & 0x0F As i8))
+			PrintCharacter(NumberToCharacter((Next & 0x0F) As i8))
+			
+			Print(" ")
+		}
+		
+		Print("\n")
+	}
+	
+	define void WriteToFile(i8* FilePath) {
+		i64 File := FileOpen(FilePath, FILE_WRITE | FILE_CREATE_NEW)
+		
+		FileWrite(File, this->Memory, Z80_MEMORY_SIZE)
+		
+		FileClose(File)
+	}
+}
+
+define void Main(i64 ArgC, i8** ArgV) {
+	GetArgs(&ArgC, &ArgV)
+	
+	if (ArgC != 3) {
+		Print("not enough args\n")
+		return
+	}
+	
+	
+	i64 File := FileOpen(ArgV[1], FILE_READ)
+	i8* Text := FileReadAll(File)
+	FileClose(File)
+	
+	Z80Assembler* Z80 := Z80Assembler:New({i8 file: "./Z80.txt"}, Text)
+	
+	Z80->ParseProgram()
+	Z80->Link()
+	
+	Z80->Print()
+	Z80->WriteToFile(ArgV[2])
+}
