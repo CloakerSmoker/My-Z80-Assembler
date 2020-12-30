@@ -17,17 +17,17 @@ FLAGS 		 	:= -i $(MAIN_FILE).rlx -o ../$(OUTPUT_PATH)
 
 debug: setup
 	-cd $(COMPILER_DIR); ./$(COMPILER_PATH) $(FLAGS).$(PLATFORM_EXTENSION) --debug
-	chmod +x $(OUTPUT_PATH)
+	chmod +x $(OUTPUT_PATH).$(PLATFORM_EXTENSION)
 
 all: linux windows
 
 linux: setup
 	-cd $(COMPILER_DIR); ./$(COMPILER_PATH) $(FLAGS).elf --debug --elf
-	chmod +x $(OUTPUT_PATH)
+	chmod +x $(OUTPUT_PATH).elf
 
 windows: setup
 	-cd $(COMPILER_DIR); ./$(COMPILER_PATH) $(FLAGS).exe --debug --pe
-	chmod +x $(OUTPUT_PATH)
+	chmod +x $(OUTPUT_PATH).exe
 
 setup:
 	chmod +x $(COMPILER_DIR)/$(COMPILER_PATH)

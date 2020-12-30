@@ -56,22 +56,28 @@ i32 Z80_IXH		   := 0x400_0000
 i32 Z80_IYL		   := 0x800_0000
 i32 Z80_IYH		  := 0x1000_0000
 
+i32 Z80_IX_DISP	  := 0x2000_0000
+i32 Z80_IY_DISP   := 0x4000_0000
+
 ; Flags an instruction defines to have a certain operand's register number placed into an opcode field
 
-i32 Z80_P_IS_OP1 := 0x001
-i32 Z80_Y_IS_OP1 := 0x002
-i32 Z80_Z_IS_OP1 := 0x004
-i32 Z80_I_IS_OP1 := 0x008
+i32 Z80_P_IS_OP1 	:= 0x0001
+i32 Z80_Y_IS_OP1 	:= 0x0002
+i32 Z80_Z_IS_OP1 	:= 0x0004
+i32 Z80_I_IS_OP1 	:= 0x0008
 
-i32 Z80_P_IS_OP2 := 0x010
-i32 Z80_Y_IS_OP2 := 0x020
-i32 Z80_Z_IS_OP2 := 0x040
-i32 Z80_I_IS_OP2 := 0x080
+i32 Z80_P_IS_OP2 	:= 0x0010
+i32 Z80_Y_IS_OP2 	:= 0x0020
+i32 Z80_Z_IS_OP2 	:= 0x0040
+i32 Z80_I_IS_OP2 	:= 0x0080
+
+i32 Z80_D_IS_OP1 	:= 0x0100
+i32 Z80_D_IS_OP2 	:= 0x0200
 
 ; Flags to push a immediate value after the instruction
 
-i32 Z80_HAS_I8 	:= 0x100
-i32 Z80_HAS_I16	:= 0x200
+i32 Z80_HAS_I8 		:= 0x0400
+i32 Z80_HAS_I16		:= 0x0800
 
 ; Flags for prefix bytes
 
@@ -264,6 +270,9 @@ struct Z80Assembler {
 		M->Set("ix", Z80_IX)
 		M->Set("iy", Z80_IY)
 		
+		M->Set("ixd", Z80_IX_DISP)
+		M->Set("iyd", Z80_IY_DISP)
+		
 		M->Set("ixl", Z80_IXL)
 		M->Set("ixh", Z80_IXH)
 		M->Set("iyl", Z80_IYL)
@@ -273,11 +282,13 @@ struct Z80Assembler {
 		M->Set("Y_IS_OP1", Z80_Y_IS_OP1)
 		M->Set("Z_IS_OP1", Z80_Z_IS_OP1)
 		M->Set("I_IS_OP1", Z80_I_IS_OP1)
+		M->Set("D_IS_OP1", Z80_D_IS_OP1)
 		
 		M->Set("P_IS_OP2", Z80_P_IS_OP2)
 		M->Set("Y_IS_OP2", Z80_Y_IS_OP2)
 		M->Set("Z_IS_OP2", Z80_Z_IS_OP2)
 		M->Set("I_IS_OP2", Z80_I_IS_OP2)
+		M->Set("D_IS_OP2", Z80_D_IS_OP2)
 		
 		M->Set("IMM8", Z80_HAS_I8)
 		M->Set("IMM16", Z80_HAS_I16)
@@ -488,8 +499,6 @@ struct Z80Assembler {
 		if (this->Lexer->NextTokenMatches(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_OPEN_PAREN)) {
 			Token* IndirectToken := this->Lexer->GetNextToken()
 			
-			this->Lexer->Consume(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_CLOSE_PAREN, "Expected ')' after indirect operand")
-			
 			if (IndirectToken->Is(TOKEN_TYPE_INTEGER)) {
 				Type := Z80_I16I
 				Value := IndirectToken->IntegerValue As i32
@@ -500,6 +509,24 @@ struct Z80Assembler {
 				if (Type = 0) {
 					Type := Z80_I16I
 					Value := this->MakeLabelReference(IndirectToken)
+				}
+				else if (Type = Z80_IX || Type = Z80_IY && this->Lexer->NextTokenMatches(TOKEN_TYPE_OPERATOR)) {
+					Token* DisplacementOperator := this->Lexer->GetCurrentToken()
+					i8 Displacement := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected displacement value")->IntegerValue As i8
+					
+					if (DisplacementOperator->Is(TOKEN_TYPE_OPERATOR, OPERATOR_MINUS)) {
+						Displacement := -Displacement
+					}
+					
+					if (Type = Z80_IX) {
+						Type := Z80_IX_DISP
+					}
+					else if (Type = Z80_IY) {
+						Type := Z80_IY_DISP
+					}
+					
+					Value := Displacement
+					Value &= 0xFF
 				}
 				else {
 					if (Type & Z80_R) {
@@ -515,6 +542,8 @@ struct Z80Assembler {
 					Value := IndirectRegister
 				}
 			}
+			
+			this->Lexer->Consume(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_CLOSE_PAREN, "Expected ')' after indirect operand")
 		}
 		else {
 			Token* OperandToken := this->Lexer->GetNextToken()
@@ -588,6 +617,7 @@ struct Z80Assembler {
 				Token* DirectiveNameToken := this->Lexer->Consume(TOKEN_TYPE_IDENTIFIER, "Expected directive name")
 				
 				SafeWideString* DirectiveName := DirectiveNameToken->StringValue
+				i8 IsFirstInlineValue := true
 				
 				if (DirectiveName->Equals("org")) {
 					Token* NewMemoryIndexToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected new org address")
@@ -600,34 +630,42 @@ struct Z80Assembler {
 					this->MemoryIndex := NewMemoryIndex
 				}
 				else if (DirectiveName->Equals("db")) {
-					Token* ByteToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected 'db' value")
-					i32 Byte := ByteToken->IntegerValue As i32
-					
-					if (Byte > 0xFF) {
-						ByteToken->Error("'db' value must fit in a single byte")
+					while (IsFirstInlineValue || this->Lexer->NextTokenMatches(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_COMMA)) {
+						Token* ByteToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected 'db' value")
+						i32 Byte := ByteToken->IntegerValue As i32
+						
+						if (Byte > 0xFF) {
+							ByteToken->Error("'db' value must fit in a single byte")
+						}
+						
+						this->AppendI8(Byte)
+						
+						IsFirstInlineValue := false
 					}
-					
-					this->AppendI8(Byte)
 				}
 				else if (DirectiveName->Equals("dw")) {
-					Token* ValueToken := this->Lexer->GetNextToken()
-					
-					i32 Word := 0
-					
-					if (ValueToken->Is(TOKEN_TYPE_INTEGER)) {
-						Word := ValueToken->IntegerValue As i32
-					}
-					else if (ValueToken->Is(TOKEN_TYPE_IDENTIFIER)) {
-						i32 LabelNumber := this->FindOrAddLabel(ValueToken, true)
+					while (IsFirstInlineValue || this->Lexer->NextTokenMatches(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_COMMA)) {
+						Token* ValueToken := this->Lexer->GetNextToken()
 						
-						this->MarkLabelReference(LabelNumber)
+						i32 Word := 0
+						
+						if (ValueToken->Is(TOKEN_TYPE_INTEGER)) {
+							Word := ValueToken->IntegerValue As i32
+						}
+						else if (ValueToken->Is(TOKEN_TYPE_IDENTIFIER)) {
+							i32 LabelNumber := this->FindOrAddLabel(ValueToken, true)
+							
+							this->MarkLabelReference(LabelNumber)
+						}
+						
+						if (Word > 0xFFFF) {
+							ValueToken->Error("'dw' value must fit in a single word")
+						}
+						
+						this->AppendI16(Word)
+						
+						IsFirstInlineValue := false
 					}
-					
-					if (Word > 0xFFFF) {
-						ValueToken->Error("'dw' value must fit in a single word")
-					}
-					
-					this->AppendI16(Word)
 				}
 			}
 			else if (FirstToken->Is(TOKEN_TYPE_IDENTIFIER)) {
@@ -717,6 +755,9 @@ struct Z80Assembler {
 				}
 			}
 		}
+		
+		if		(Flags & Z80_D_IS_OP1) { this->AppendI8(LeftOperand) }
+		else if	(Flags & Z80_D_IS_OP2) { this->AppendI8(RightOperand) }
 		
 		i8 ImmediateIsI8 := !!(Flags & Z80_HAS_I8)
 		

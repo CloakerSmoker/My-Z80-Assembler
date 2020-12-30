@@ -180,6 +180,14 @@ dec			0+5+1+2		ixl			DD
 dec			0+5+0+2		iyh			FD
 dec			0+5+1+2		iyl			FD
 
+inc			0+4+6		ixd			D_IS_OP1|DD
+inc			0+4+6		iyd			D_IS_OP1|FD
+dec			0+5+6		ixd			D_IS_OP1|DD
+dec			0+5+6		iyd			D_IS_OP1|FD
+
+ld			0+6+6		ixd,i8		D_IS_OP1|I_IS_OP2|IMM8|DD
+ld			0+6+6		iyd,i8		D_IS_OP1|I_IS_OP2|IMM8|FD
+
 ld			0+6+0+2		ixh,i8		I_IS_OP2|IMM8|DD
 ld			0+6+1+2		ixl,i8		I_IS_OP2|IMM8|DD
 ld			0+6+0+2		iyh,i8		I_IS_OP2|IMM8|FD
@@ -190,6 +198,12 @@ ld			1+5+_		r,ixl		Y_IS_OP1|DD
 ld			1+4+_		r,iyh		Y_IS_OP1|FD
 ld			1+5+_		r,iyl		Y_IS_OP1|FD
 
+ld			1+6+_		r,ixd		Y_IS_OP1|D_IS_OP2|DD
+ld			1+6+_		r,iyd		Y_IS_OP1|D_IS_OP2|FD
+
+ld			1+_+6		ixd,r		D_IS_OP1|Z_IS_OP2|DD
+ld			1+_+6		iyd,r		D_IS_OP1|Z_IS_OP2|FD
+
 ld 			1+_+0+2		ixh,r		Z_IS_OP2|DD
 ld 			1+_+1+2		ixl,r		Z_IS_OP2|DD
 ld 			1+_+0+2		iyh,r		Z_IS_OP2|FD
@@ -199,3 +213,20 @@ pop			2+1+4		ix			DD
 push		2+5+4		ix			DD
 pop			2+1+4		iy			FD
 push		2+5+4		iy			FD
+
+add			2+6+0		a,ixd		D_IS_OP2|DD
+add			2+6+0		a,iyd		D_IS_OP2|FD
+sub			2+6+1		a,ixd		D_IS_OP2|DD
+sub			2+6+1		a,iyd		D_IS_OP2|FD
+and			2+6+2		a,ixd		D_IS_OP2|DD
+and			2+6+2		a,iyd		D_IS_OP2|FD
+or			2+6+3		a,ixd		D_IS_OP2|DD
+or			2+6+3		a,iyd		D_IS_OP2|FD
+adc			2+6+4		a,ixd		D_IS_OP2|DD
+adc			2+6+4		a,iyd		D_IS_OP2|FD
+sbc			2+6+5		a,ixd		D_IS_OP2|DD
+sbc			2+6+5		a,iyd		D_IS_OP2|FD
+xor			2+6+6		a,ixd		D_IS_OP2|DD
+xor			2+6+6		a,iyd		D_IS_OP2|FD
+cp			2+6+7		a,ixd		D_IS_OP2|DD
+cp			2+6+7		a,iyd		D_IS_OP2|FD
