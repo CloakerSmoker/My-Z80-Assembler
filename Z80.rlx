@@ -80,14 +80,6 @@ i32 Z80_PREFIX_CB := 0x2000
 i32 Z80_PREFIX_DD := 0x4000
 i32 Z80_PREFIX_FD := 0x8000
 
-; Opcode bit field masks
-
-i8 Z80_OPCODE_MASK_X := 0b11_000_000
-i8 Z80_OPCODE_MASK_Y := 0b00_111_000
-i8 Z80_OPCODE_MASK_P := 0b00_110_000
-i8 Z80_OPCODE_MASK_Q := 0b00_001_000
-i8 Z80_OPCODE_MASK_Z := 0b00_000_111
-
 ; Instruction definition, holds the operand types/opcode/flags which define a single actual instruction
 
 struct Z80Instruction {
@@ -171,6 +163,8 @@ struct Z80Assembler {
 	
 	HashMap* LabelNameToIndex
 	
+	Token** LabelReferenceBlameTokens
+	
 	static Z80Assembler* New(i8* InstructionListing, i8* SourceText) {
 		Z80Assembler* this := Alloc(#Z80Assembler)
 		
@@ -214,6 +208,8 @@ struct Z80Assembler {
 		this->Memory := Alloc(Z80_MEMORY_SIZE)
 		
 		this->LabelPositions := Alloc(4)
+		this->LabelReferenceBlameTokens := Alloc(8)
+		
 		this->LabelReferences := Alloc(4)
 		
 		this->LabelNameToIndex := HashMap:New()
@@ -331,14 +327,14 @@ struct Z80Assembler {
 			
 			Z80Instruction* NewListHead := Alloc(#Z80Instruction)
 			
-			i8 X := Lexer->GetNextToken()->IntegerValue
+			i8 X := Lexer->GetNextToken()->IntegerValue As i8
 			Lexer->Consume(TOKEN_TYPE_OPERATOR, OPERATOR_PLUS, "Expected '+'")
-			i8 Z := Lexer->GetNextToken()->IntegerValue
+			i8 Z := Lexer->GetNextToken()->IntegerValue As i8
 			Lexer->Consume(TOKEN_TYPE_OPERATOR, OPERATOR_PLUS, "Expected '+'")
-			i8 YOrQ := Lexer->GetNextToken()->IntegerValue
+			i8 YOrQ := Lexer->GetNextToken()->IntegerValue As i8
 			
 			if (Lexer->NextTokenMatches(TOKEN_TYPE_OPERATOR, OPERATOR_PLUS)) {
-				i8 P := Lexer->GetNextToken()->IntegerValue
+				i8 P := Lexer->GetNextToken()->IntegerValue As i8
 				
 				NewListHead->Opcode := this->PackOpcode(X, this->PackY(P, YOrQ), Z)
 			}
@@ -357,7 +353,7 @@ struct Z80Assembler {
 			i8 IsFirstOption := true
 			
 			while (IsFirstOption || Lexer->NextTokenMatches(TOKEN_TYPE_OPERATOR, OPERATOR_OR)) {
-				NewListHead->Flags |= Lexer->GetNextToken()->IntegerValue
+				NewListHead->Flags |= Lexer->GetNextToken()->IntegerValue As i32
 				
 				IsFirstOption := false
 			}
@@ -453,7 +449,7 @@ struct Z80Assembler {
 		HashMapElement* LabelElement := this->LabelNameToIndex->Get(LabelNameToken->StringValue)
 		
 		if (LabelElement != null) {
-			Index := LabelElement->Value
+			Index := LabelElement->Value As i32
 			
 			i32 LabelValue := this->LabelPositions[Index]
 			
@@ -464,14 +460,16 @@ struct Z80Assembler {
 		else {
 			this->LabelPositionCount += 1
 			this->LabelPositions := ReAlloc(this->LabelPositions, this->LabelPositionCount * #i16)
+			this->LabelReferenceBlameTokens := ReAlloc(this->LabelReferenceBlameTokens, this->LabelPositionCount * #i16)
 			
 			this->LabelNameToIndex->Set(LabelNameToken->StringValue, Index)
 			
 			this->LabelPositions[Index] := 0x7FFF
+			this->LabelReferenceBlameTokens[Index] := LabelNameToken
 		}
 		
 		if !(Find) {
-			this->LabelPositions[Index] := this->MemoryIndex
+			this->LabelPositions[Index] := this->MemoryIndex As i16
 		}
 		
 		return Index
@@ -553,7 +551,7 @@ struct Z80Assembler {
 				
 				;Print("Operands[%i] = %x\n", OperandCount, NextOperand)
 				
-				Result~>Operands[OperandCount] := NextOperand & 0xFFFF_FFFF
+				Result~>Operands[OperandCount] := (NextOperand & 0xFFFF_FFFF) As i32
 				OperandTypes |= (NextOperand >> 32) << ((OperandCount * 32) As i8)
 				
 				OperandCount += 1
@@ -573,6 +571,7 @@ struct Z80Assembler {
 	declare void AssembleInstruction(Z80InstructionNode*)
 	declare void AppendI8(i32)
 	declare void AppendI16(i32)
+	declare void MarkLabelReference(i32)
 	
 	define void ParseProgram() {
 		loop {
@@ -592,7 +591,7 @@ struct Z80Assembler {
 				
 				if (DirectiveName->Equals("org")) {
 					Token* NewMemoryIndexToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected new org address")
-					i64 NewMemoryIndex := NewMemoryIndexToken->IntegerValue
+					i32 NewMemoryIndex := NewMemoryIndexToken->IntegerValue As i32
 					
 					if (NewMemoryIndex > 0xFFFF) {
 						NewMemoryIndexToken->Error("Org address out of bounds")
@@ -602,7 +601,7 @@ struct Z80Assembler {
 				}
 				else if (DirectiveName->Equals("db")) {
 					Token* ByteToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected 'db' value")
-					i32 Byte := ByteToken->IntegerValue
+					i32 Byte := ByteToken->IntegerValue As i32
 					
 					if (Byte > 0xFF) {
 						ByteToken->Error("'db' value must fit in a single byte")
@@ -611,11 +610,21 @@ struct Z80Assembler {
 					this->AppendI8(Byte)
 				}
 				else if (DirectiveName->Equals("dw")) {
-					Token* WordToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected 'dw' value")
-					i32 Word := WordToken->IntegerValue
+					Token* ValueToken := this->Lexer->GetNextToken()
+					
+					i32 Word := 0
+					
+					if (ValueToken->Is(TOKEN_TYPE_INTEGER)) {
+						Word := ValueToken->IntegerValue As i32
+					}
+					else if (ValueToken->Is(TOKEN_TYPE_IDENTIFIER)) {
+						i32 LabelNumber := this->FindOrAddLabel(ValueToken, true)
+						
+						this->MarkLabelReference(LabelNumber)
+					}
 					
 					if (Word > 0xFFFF) {
-						WordToken->Error("'dw' value must fit in a single word")
+						ValueToken->Error("'dw' value must fit in a single word")
 					}
 					
 					this->AppendI16(Word)
@@ -641,7 +650,7 @@ struct Z80Assembler {
 	define void AppendI8(i32 Value) {
 		this->EnsureCapacity()
 		
-		this->MemoryBytes[this->MemoryIndex] := Value & 0xFF
+		this->MemoryBytes[this->MemoryIndex] := (Value & 0xFF) As i8
 		this->MemoryIndex += 1
 	}
 	define void AppendI16(i32 Value) {
@@ -670,10 +679,10 @@ struct Z80Assembler {
 	define void AssembleInstruction(Z80InstructionNode* Instruction) {
 		Z80Instruction* Base := Instruction->Base
 		
-		i16 LeftOperand := Instruction~>Operands[0]
-		i16 RightOperand := Instruction~>Operands[1]
+		i16 LeftOperand := Instruction~>Operands[0] As i16
+		i16 RightOperand := Instruction~>Operands[1] As i16
 		i16 Opcode := Base->Opcode
-		i16 Flags := Base->Flags
+		i16 Flags := Base->Flags As i16
 		
 		;Print("\nOpcode: %x\nFlags: %x\n", Opcode, Flags)
 		;Print("Left = %x, Right = %x\n", LeftOperand, RightOperand)
@@ -684,13 +693,13 @@ struct Z80Assembler {
 		
 		if 		(Flags & Z80_PREFIX_CB) { this->AppendI8(0xCB) }
 		
-		if 		(Flags & Z80_P_IS_OP1) { Opcode := this->RepackP(Opcode, LeftOperand) }
-		else if (Flags & Z80_Y_IS_OP1) { Opcode := this->RepackY(Opcode, LeftOperand) }
-		else if (Flags & Z80_Z_IS_OP1) { Opcode := this->RepackZ(Opcode, LeftOperand) }
+		if 		(Flags & Z80_P_IS_OP1) { Opcode := this->RepackP(Opcode, LeftOperand) As i16 }
+		else if (Flags & Z80_Y_IS_OP1) { Opcode := this->RepackY(Opcode, LeftOperand) As i16 }
+		else if (Flags & Z80_Z_IS_OP1) { Opcode := this->RepackZ(Opcode, LeftOperand) As i16 }
 		
-		if 		(Flags & Z80_P_IS_OP2) { Opcode := this->RepackP(Opcode, RightOperand) }
-		else if (Flags & Z80_Y_IS_OP2) { Opcode := this->RepackY(Opcode, RightOperand) }
-		else if (Flags & Z80_Z_IS_OP2) { Opcode := this->RepackZ(Opcode, RightOperand) }
+		if 		(Flags & Z80_P_IS_OP2) { Opcode := this->RepackP(Opcode, RightOperand) As i16 }
+		else if (Flags & Z80_Y_IS_OP2) { Opcode := this->RepackY(Opcode, RightOperand) As i16 }
+		else if (Flags & Z80_Z_IS_OP2) { Opcode := this->RepackZ(Opcode, RightOperand) As i16 }
 		
 		;Print("New Opcode: %x\n", Opcode)
 		
@@ -698,7 +707,7 @@ struct Z80Assembler {
 		
 		for (i32 OperandIndex := 0, OperandIndex < 2, OperandIndex += 1) {
 			i32 NextOperand := Instruction~>Operands[OperandIndex]
-			i32 NextOperandType := Instruction->PackedOperands >> ((OperandIndex * 32) As i8)
+			i32 NextOperandType := (Instruction->PackedOperands >> ((OperandIndex * 32) As i8)) As i32
 			
 			if (NextOperandType = Z80_I || NextOperandType = Z80_I16I) {
 				if (NextOperand & 0x1_0000) {
@@ -724,7 +733,11 @@ struct Z80Assembler {
 			
 			i32 TargetLabelPosition := this->LabelPositions[TargetLabelIndex]
 			
-			(this->Memory + TargetPosition As i16*)[0] := TargetLabelPosition
+			if (TargetLabelPosition = 0x7FFF) {
+				this->LabelReferenceBlameTokens[TargetLabelIndex]->Error("Label not found")
+			}
+			
+			(this->Memory + TargetPosition As i16*)[0] := TargetLabelPosition As i16
 		}
 	}
 	
