@@ -631,35 +631,45 @@ struct Z80Assembler {
 				}
 				else if (DirectiveName->Equals("db")) {
 					while (IsFirstInlineValue || this->Lexer->NextTokenMatches(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_COMMA)) {
-						Token* ByteToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected 'db' value")
-						i32 Byte := ByteToken->IntegerValue As i32
+						Token* ByteToken := this->Lexer->GetNextToken()
 						
-						if (Byte > 0xFF) {
-							ByteToken->Error("'db' value must fit in a single byte")
+						if (ByteToken->Is(TOKEN_TYPE_INTEGER)) {
+							i32 Byte := ByteToken->IntegerValue As i32
+							
+							if (Byte > 0xFF) {
+								ByteToken->Error("'db' value must fit in a single byte")
+							}
+						
+							this->AppendI8(Byte)
 						}
-						
-						this->AppendI8(Byte)
+						else if (ByteToken->Is(TOKEN_TYPE_STRING)) {
+							SafeWideString* StringValue := ByteToken->StringValue
+							
+							for (i32 StringIndex := 0, StringIndex < StringValue->Length, StringIndex += 1) {
+								this->AppendI8(StringValue->ASCIICharacterAt(StringIndex))
+							}
+						}
 						
 						IsFirstInlineValue := false
 					}
 				}
 				else if (DirectiveName->Equals("dw")) {
 					while (IsFirstInlineValue || this->Lexer->NextTokenMatches(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_COMMA)) {
-						Token* ValueToken := this->Lexer->GetNextToken()
+						Token* WordToken := this->Lexer->GetNextToken()
 						
 						i32 Word := 0
 						
-						if (ValueToken->Is(TOKEN_TYPE_INTEGER)) {
-							Word := ValueToken->IntegerValue As i32
+						if (WordToken->Is(TOKEN_TYPE_INTEGER)) {
+							Word := WordToken->IntegerValue As i32
 						}
-						else if (ValueToken->Is(TOKEN_TYPE_IDENTIFIER)) {
-							i32 LabelNumber := this->FindOrAddLabel(ValueToken, true)
+						else if (WordToken->Is(TOKEN_TYPE_IDENTIFIER)) {
+							i32 LabelNumber := this->FindOrAddLabel(WordToken, true)
 							
 							this->MarkLabelReference(LabelNumber)
 						}
 						
 						if (Word > 0xFFFF) {
-							ValueToken->Error("'dw' value must fit in a single word")
+							WordToken->Error("'dw' value must fit in a single word")
 						}
 						
 						this->AppendI16(Word)
