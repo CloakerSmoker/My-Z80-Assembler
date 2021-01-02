@@ -1,6 +1,8 @@
 ; name	x,z,y
 ; name 	x,z,q,p
 
+; General instructionss
+
 nop 		0+0+0 		_ 			_
 ex			0+0+1		af,af		_
 
@@ -118,14 +120,16 @@ abc			1+2+1+_		hl,rp2		P_IS_OP2|ED
 ld			1+3+0+_		i16i,rp		I_IS_OP1|IMM16|P_IS_OP2|ED
 ld			1+3+1+_		rp,i16i		I_IS_OP2|IMM16|P_IS_OP1|ED
 
+; Extended instructions
+
 neg			1+4+0		a			ED
 
 retn		1+5+0		_			ED
 reti		1+5+1		_			ED
 
-sim0		1+6+0		_			ED
-sim1		1+6+2		_			ED
-sim2		1+6+3		_			ED
+im0			1+6+0		_			ED
+im1			1+6+2		_			ED
+im2			1+6+3		_			ED
 
 ld			1+7+0		irv,a		ED
 ld			1+7+1		rfc,a		ED
@@ -154,6 +158,8 @@ lddr		2+0+6		_			ED
 cpdr		2+1+6		_			ED
 indr		2+2+6		_			ED
 otdr		2+3+6		_			ED
+
+; IX/IY general instructions
 
 add			0+1+1+_		ix,rp		P_IS_OP2|DD
 add			0+1+1+_		iy,rp		P_IS_OP2|FD
@@ -230,3 +236,57 @@ xor			2+6+6		a,ixd		D_IS_OP2|DD
 xor			2+6+6		a,iyd		D_IS_OP2|FD
 cp			2+6+7		a,ixd		D_IS_OP2|DD
 cp			2+6+7		a,iyd		D_IS_OP2|FD
+
+; Bit instructions
+
+rlc 		0+_+0+0		r			Z_IS_OP1|CB
+rrc 		0+_+1+0		r			Z_IS_OP1|CB
+
+rl			0+_+0+1		r			Z_IS_OP1|CB
+rr			0+_+1+1		r			Z_IS_OP1|CB
+
+sla			0+_+0+2		r			Z_IS_OP1|CB
+sra			0+_+1+2		r			Z_IS_OP1|CB
+
+sll			0+_+0+3		r			Z_IS_OP1|CB
+srl			0+_+1+3		r			Z_IS_OP1|CB
+
+bit 		1+_+_		r,i8		Z_IS_OP1|Y_IS_OP2|CB
+res 		2+_+_		r,i8		Z_IS_OP1|Y_IS_OP2|CB
+set 		3+_+_		r,i8		Z_IS_OP1|Y_IS_OP2|CB
+
+; IX Bit instructions
+
+rlc 		0+0+0+0		ixd			D_IS_OP1|DD|CB
+rrc 		0+0+1+0		ixd			D_IS_OP1|DD|CB
+
+rl			0+0+0+1		ixd			D_IS_OP1|DD|CB
+rr			0+0+1+1		ixd			D_IS_OP1|DD|CB
+
+sla			0+0+0+2		ixd			D_IS_OP1|DD|CB
+sra			0+0+1+2		ixd			D_IS_OP1|DD|CB
+
+sll			0+0+0+3		ixd			D_IS_OP1|DD|CB
+srl			0+0+1+3		ixd			D_IS_OP1|DD|CB
+
+bit 		1+6+_		ixd,i8		D_IS_OP1|Y_IS_OP2|DD|CB
+res 		2+6+_		ixd,i8		D_IS_OP1|Y_IS_OP2|DD|CB
+set 		3+6+_		ixd,i8		D_IS_OP1|Y_IS_OP2|DD|CB
+
+; IY Bit instructions
+
+rlc 		0+0+0+0		iyd			D_IS_OP1|FD|CB
+rrc 		0+0+1+0		iyd			D_IS_OP1|FD|CB
+
+rl			0+0+0+1		iyd			D_IS_OP1|FD|CB
+rr			0+0+1+1		iyd			D_IS_OP1|FD|CB
+
+sla			0+0+0+2		iyd			D_IS_OP1|FD|CB
+sra			0+0+1+2		iyd			D_IS_OP1|FD|CB
+
+sll			0+0+0+3		iyd			D_IS_OP1|FD|CB
+srl			0+0+1+3		iyd			D_IS_OP1|FD|CB
+
+bit 		1+6+_		iyd,i8		D_IS_OP1|Y_IS_OP2|FD|CB
+res 		2+6+_		iyd,i8		D_IS_OP1|Y_IS_OP2|FD|CB
+set 		3+6+_		iyd,i8		D_IS_OP1|Y_IS_OP2|FD|CB
