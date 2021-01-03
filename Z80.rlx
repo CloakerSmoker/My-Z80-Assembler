@@ -168,6 +168,7 @@ struct Z80Assembler {
 	i32 LabelReferenceCount
 	
 	HashMap* LabelNameToIndex
+	HashMap* Constants
 	
 	Token** LabelReferenceBlameTokens
 	
@@ -219,6 +220,7 @@ struct Z80Assembler {
 		this->LabelReferences := Alloc(4)
 		
 		this->LabelNameToIndex := HashMap:New()
+		this->Constants := HashMap:New()
 		
 		return this
 	}
@@ -508,7 +510,15 @@ struct Z80Assembler {
 				
 				if (Type = 0) {
 					Type := Z80_I16I
-					Value := this->MakeLabelReference(IndirectToken)
+					
+					HashMapElement* IndirectElement := this->Constants->Get(IndirectToken->StringValue)
+					
+					if (IndirectElement = null) {
+						Value := IndirectElement->Value As i32
+					}
+					else {
+						Value := this->MakeLabelReference(IndirectToken)
+					}
 				}
 				else if (Type = Z80_IX || Type = Z80_IY && this->Lexer->NextTokenMatches(TOKEN_TYPE_OPERATOR)) {
 					Token* DisplacementOperator := this->Lexer->GetCurrentToken()
@@ -553,7 +563,15 @@ struct Z80Assembler {
 				
 				if (Type = 0) {
 					Type := Z80_I
-					Value := this->MakeLabelReference(OperandToken)
+					
+					HashMapElement* ValueElement := this->Constants->Get(OperandToken->StringValue)
+					
+					if (ValueElement = null) {
+						Value := this->MakeLabelReference(OperandToken)
+					}
+					else {
+						Value := ValueElement->Value As i32
+					}
 				}
 			}
 			else if (OperandToken->Is(TOKEN_TYPE_INTEGER)) {
@@ -676,6 +694,18 @@ struct Z80Assembler {
 						
 						IsFirstInlineValue := false
 					}
+				}
+				else if (DirectiveName->Equals("set")) {
+					Token* NameToken := this->Lexer->Consume(TOKEN_TYPE_IDENTIFIER, "Expected constant name")
+					Token* ValueToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected constant value")
+					
+					HashMapElement* NameElement := this->Constants->Get(NameToken->StringValue)
+					
+					if (NameElement != null) {
+						NameToken->Error("Duplicate constant definition")
+					}
+					
+					this->Constants->Set(NameToken->StringValue, ValueToken->IntegerValue)
 				}
 			}
 			else if (FirstToken->Is(TOKEN_TYPE_IDENTIFIER)) {

@@ -36,13 +36,14 @@ Labels are written as `Name:`, where `Name` needs to be unique (aka not already 
 
 ---
 
-This assembler uses `!` as a prefix for directives, and only supports three directives (for now):
+This assembler uses `!` as a prefix for directives, and only supports four directives (for now):
 
 | Directive name/parameters | Usage |
 |---------------------------|-------|
 | `!org Short` | Seeks to address `Short` inside of the assembler's virtual Z80 address space. This means that any instructions/data following this directive will expect to be loaded at the address given. |
 | `!db Byte` | Will write `Byte`'s value as a raw byte to the next position in the assembler's virtual Z80 memory. |
 | `!dw Short` | Same as `!db`, but with a 16 bit value instead of an 8 bit one. |
+| `!set Name Value` | Tells the assembler to replace `Name` with `Value` when used as an operand for an instruction. |
 
 Both `db` and `dw` allow multiple values to be written as long as they are separated by commas, for example:
 
