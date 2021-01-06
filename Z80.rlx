@@ -71,6 +71,9 @@ i32 Z80_Y_IS_OP2 	:= 0x0020
 i32 Z80_Z_IS_OP2 	:= 0x0040
 i32 Z80_I_IS_OP2 	:= 0x0080
 
+i32 Z80_OP1_IS_REGISTER := 0xF
+i32 Z80_OP2_IS_REGISTER := 0xF0
+
 i32 Z80_D_IS_OP1 	:= 0x0100
 i32 Z80_D_IS_OP2 	:= 0x0200
 
@@ -98,6 +101,8 @@ struct Z80Instruction {
 	i32 Flags
 	
 	Z80Instruction* Next
+	
+	SafeWideString* Name
 	
 	define void Print() {
 		Print("Opcode %x\n", this->Opcode)
@@ -172,8 +177,26 @@ struct Z80Assembler {
 	
 	Token** LabelReferenceBlameTokens
 	
+	Z80Instruction** NoPrefixInstructions
+	Z80Instruction** EDInstructions
+	Z80Instruction** CBInstructions
+	Z80Instruction** DDInstructions
+	Z80Instruction** FDInstructions
+	Z80Instruction** CBDDInstructions
+	Z80Instruction** CBFDInstructions
+	
 	static Z80Assembler* New(i8* InstructionListing, i8* SourceText) {
 		Z80Assembler* this := Alloc(#Z80Assembler)
+		
+		i32 OpcodeMapSize := 0xFF * #Z80Instruction*
+		
+		this->NoPrefixInstructions := Alloc(OpcodeMapSize)
+		this->EDInstructions := Alloc(OpcodeMapSize)
+		this->CBInstructions := Alloc(OpcodeMapSize)
+		this->DDInstructions := Alloc(OpcodeMapSize)
+		this->FDInstructions := Alloc(OpcodeMapSize)
+		this->CBDDInstructions := Alloc(OpcodeMapSize)
+		this->CBFDInstructions := Alloc(OpcodeMapSize)
 		
 		this->LoadInstructions(InstructionListing)
 		
@@ -317,6 +340,87 @@ struct Z80Assembler {
 		return Opcode | NewZ
 	}
 	
+	define Z80Instruction** GetOpcodeMap(i32 PrefixFlags) {
+		i8 NeedsCB := (PrefixFlags & Z80_PREFIX_CB) != 0
+		
+		if (PrefixFlags & Z80_PREFIX_DD) {
+			if (NeedsCB) {
+				return this->FDInstructions
+			}
+			else {
+				return this->DDInstructions
+			}
+		}
+		else if (PrefixFlags & Z80_PREFIX_FD) {
+			if (NeedsCB) {
+				return this->CBFDInstructions
+			}
+			else {
+				return this->FDInstructions
+			}
+		}
+		else if (PrefixFlags & Z80_PREFIX_ED) {
+			return this->EDInstructions
+		}
+		else if (NeedsCB) {
+			return this->CBInstructions
+		}
+		
+		return this->NoPrefixInstructions
+	}
+	
+	declare i16 PackOpcode(Z80Instruction*, i32, i16, i16)
+	
+	define void RegisterInstruction(Z80Instruction* Target) {
+		i32 Flags := Target->Flags
+		
+		Z80Instruction** OpcodeMap := this->GetOpcodeMap(Flags)
+		
+		i8 LeftOperandIsRegister := (Flags & Z80_OP1_IS_REGISTER) != 0
+		i8 RightOperandIsRegister := (Flags & Z80_OP2_IS_REGISTER) != 0
+		
+		i16 Opcode := 0
+		
+		if (LeftOperandIsRegister) {
+			for (i16 LeftOperandValue := 0, LeftOperandValue < 8, LeftOperandValue += 1) {
+				if (RightOperandIsRegister) {
+					for (i16 RightOperandValue := 0, RightOperandValue < 8, RightOperandValue += 1) {
+						Opcode := this->PackOpcode(Target, Flags, LeftOperandValue, RightOperandValue)
+						
+						OpcodeMap[Opcode] := Target
+						
+						;Print("M[%x] := ", Opcode)
+						;Target->Name->PrintLine()
+					}
+				}
+				else {
+					Opcode := this->PackOpcode(Target, Flags, LeftOperandValue, 0)
+					
+					OpcodeMap[Opcode] := Target
+					
+					;Print("M[%x] := ", Opcode)
+					;Target->Name->PrintLine()
+				}
+			}
+		}
+		else if (RightOperandIsRegister) {
+			for (RightOperandValue := 0, RightOperandValue < 8, RightOperandValue += 1) {
+				Opcode := this->PackOpcode(Target, Flags, 0, RightOperandValue)
+				
+				OpcodeMap[Opcode] := Target
+				
+				;Print("M[%x] := ", Opcode)
+				;Target->Name->PrintLine()
+			}
+		}
+		else {
+			OpcodeMap[Target->Opcode] := Target
+			
+			;Print("M[%x] := ", Target->Opcode)
+			;Target->Name->PrintLine()
+		}
+	}
+	
 	define void LoadInstructions(i8* InstructionListing) {
 		i32 Length := StringLength(InstructionListing)
 		
@@ -336,9 +440,10 @@ struct Z80Assembler {
 				break
 			}
 			
-			SafeWideString* InstructionName := InstructionNameToken->StringValue
-			
 			Z80Instruction* NewListHead := Alloc(#Z80Instruction)
+			
+			SafeWideString* InstructionName := InstructionNameToken->StringValue
+			NewListHead->Name := InstructionName
 			
 			i8 X := Lexer->GetNextToken()->IntegerValue As i8
 			Lexer->Consume(TOKEN_TYPE_OPERATOR, OPERATOR_PLUS, "Expected '+'")
@@ -374,6 +479,7 @@ struct Z80Assembler {
 			;InstructionName->Print()
 			;Print("	{ Opcode: %x,		Flags: %x, 	Operands: %x }\n", NewListHead->Opcode, NewListHead->Flags, NewListHead->PackedOperands)
 			
+			this->RegisterInstruction(NewListHead)
 			
 			HashMapElement* OldListHeadElement := Instructions->Get(InstructionName)
 			
@@ -754,12 +860,25 @@ struct Z80Assembler {
 		this->LabelReferences[Index] := (LabelNumber << 16) | this->MemoryIndex
 	}
 	
+	define i16 PackOpcode(Z80Instruction* Instruction, i32 Flags, i16 LeftOperand, i16 RightOperand) {
+		i16 Opcode := Instruction->Opcode
+		
+		if 		(Flags & Z80_P_IS_OP1) { Opcode := this->RepackP(Opcode, LeftOperand) As i16 }
+		else if (Flags & Z80_Y_IS_OP1) { Opcode := this->RepackY(Opcode, LeftOperand) As i16 }
+		else if (Flags & Z80_Z_IS_OP1) { Opcode := this->RepackZ(Opcode, LeftOperand) As i16 }
+		
+		if 		(Flags & Z80_P_IS_OP2) { Opcode := this->RepackP(Opcode, RightOperand) As i16 }
+		else if (Flags & Z80_Y_IS_OP2) { Opcode := this->RepackY(Opcode, RightOperand) As i16 }
+		else if (Flags & Z80_Z_IS_OP2) { Opcode := this->RepackZ(Opcode, RightOperand) As i16 }
+		
+		return Opcode
+	}
+	
 	define void AssembleInstruction(Z80InstructionNode* Instruction) {
 		Z80Instruction* Base := Instruction->Base
 		
 		i16 LeftOperand := Instruction~>Operands[0] As i16
 		i16 RightOperand := Instruction~>Operands[1] As i16
-		i16 Opcode := Base->Opcode
 		i16 Flags := Base->Flags As i16
 		
 		;Print("\nOpcode: %x\nFlags: %x\n", Opcode, Flags)
@@ -771,17 +890,9 @@ struct Z80Assembler {
 		
 		if 		(Flags & Z80_PREFIX_CB) { this->AppendI8(0xCB) }
 		
-		if 		(Flags & Z80_P_IS_OP1) { Opcode := this->RepackP(Opcode, LeftOperand) As i16 }
-		else if (Flags & Z80_Y_IS_OP1) { Opcode := this->RepackY(Opcode, LeftOperand) As i16 }
-		else if (Flags & Z80_Z_IS_OP1) { Opcode := this->RepackZ(Opcode, LeftOperand) As i16 }
-		
-		if 		(Flags & Z80_P_IS_OP2) { Opcode := this->RepackP(Opcode, RightOperand) As i16 }
-		else if (Flags & Z80_Y_IS_OP2) { Opcode := this->RepackY(Opcode, RightOperand) As i16 }
-		else if (Flags & Z80_Z_IS_OP2) { Opcode := this->RepackZ(Opcode, RightOperand) As i16 }
-		
 		;Print("New Opcode: %x\n", Opcode)
 		
-		this->AppendI8(Opcode)
+		this->AppendI8(this->PackOpcode(Base, Flags, LeftOperand, RightOperand))
 		
 		for (i32 OperandIndex := 0, OperandIndex < 2, OperandIndex += 1) {
 			i32 NextOperand := Instruction~>Operands[OperandIndex]
@@ -842,26 +953,253 @@ struct Z80Assembler {
 		
 		FileClose(File)
 	}
+	
+	define i8 IsPowerOfTwo(i32 Number) {
+		return Number && !(Number & (Number - 1))
+	}
+	
+	define i8* GetRegisterName(i32 RegisterType, i32 RegisterValue) {
+		i8*{8} R {"b", "c", "d", "e", "h", "l", "(hlb)", "a"}
+		i8*{4} RP {"bc", "de", "hl", "sp"}
+		i8*{4} RPI {"(bc)", "(de)", "(hl)", "(sp)"}
+		i8*{4} RP2 {"bc", "de", "hl", "af"}
+		i8*{4} RP2I {"(bc)", "(de)", "(hl)", "(af)"}
+		
+		
+		if (RegisterType = Z80_R) { return R[RegisterValue] }
+		if (RegisterType = Z80_RP) { return RP[RegisterValue] }
+		if (RegisterType = Z80_RPI) { return RP[RegisterValue] }
+		if (RegisterType = Z80_RP2) { return RP[RegisterValue] }
+		if (RegisterType = Z80_RP2I) { return RP[RegisterValue] }
+		if (RegisterType = Z80_IRV) { return "i" }
+		if (RegisterType = Z80_RFC) { return "r" }
+		if (RegisterType = Z80_IX) { return "ix" }
+		if (RegisterType = Z80_IY) { return "iy" }
+		if (RegisterType = Z80_IXL) { return "ixl" }
+		if (RegisterType = Z80_IXH) { return "ixh" }
+		if (RegisterType = Z80_IYL) { return "iyl" }
+		if (RegisterType = Z80_IYH) { return "iyh" }
+		if (RegisterType = Z80_IX_DISP) { return "ix+" }
+		if (RegisterType = Z80_IY_DISP) { return "iy+" }
+		
+		return null
+	}
+	
+	define i8* DisassembleRegister(i8* Buffer, i32 RegisterType, i32 RegisterValue) {
+		i8* Name := this->GetRegisterName(RegisterType, RegisterValue)
+		
+		if (Name = null) {
+			i8{2} TempName {('0' + RegisterValue) As i8, 0}
+			
+			Name := TempName
+		}
+		
+		i32 Length := StringLength(Name)
+		
+		MoveMemory(Buffer, Name, Length)
+		
+		return Buffer + Length
+	}
+	
+	define i8* DisassembleOperand(i8* Buffer, i8* Opcode, i32 OperandType, i32 Flags) {
+		i8 OpcodeByte := *Opcode
+		
+		if (Flags & Z80_I_IS_OP1) {
+			i32 ImmediateI8 := Opcode[1]
+			i32 ImmediateI16 := *(Opcode + 1 As i16*)
+			
+			if (OperandType & Z80_I16I) {
+				Buffer[0] := '('
+				Buffer := IToA(ImmediateI16, 16, Buffer + 1, true)
+				Buffer += StringLength(Buffer)
+				Buffer[0] := ')'
+				Buffer += 1
+			}
+			else {
+				if (Flags & Z80_HAS_I8) {
+					Buffer := IToA(ImmediateI8, 10, Buffer)
+				}
+				else {
+					Buffer := IToA(ImmediateI16, 10, Buffer)
+				}
+				
+				Buffer += StringLength(Buffer)
+			}
+		}
+		else if (Flags & Z80_D_IS_OP1) {
+			i8 DisplacementValue := Opcode[1]
+			
+			; By default, assume a Z80_PREFIX_DD instruction (aka an instruction that uses `ix` instead of `iy`)
+			;  which takes a positive displacement
+			
+			i8* DisplacementBase := "(ix + "
+			
+			if (Flags & Z80_PREFIX_FD) {
+				; Correct for a Z80_PREFIX_FD instruction (aka using `iy` instead of `ix`)
+				
+				DisplacementBase := "(iy + "
+			}
+			
+			MoveMemory(Buffer, DisplacementBase, 6)
+			
+			if (DisplacementValue < 0) {
+				; Correct for a negative displacement, and replace the `+` in `DisplacementBase` with a `-`
+				
+				Buffer[4] := '-'
+				DisplacementValue := -DisplacementValue
+			}
+			
+			Buffer += 6
+			
+			Buffer := IToA(DisplacementValue, 16, Buffer, true)
+			Buffer += StringLength(Buffer)
+			
+			Buffer[0] := ')'
+			Buffer += 1
+		}
+		else if (Flags & Z80_Z_IS_OP1) {
+			i32 ZValue := OpcodeByte & 0b00_000_111
+			
+			Buffer := this->DisassembleRegister(Buffer, OperandType, ZValue)
+		}
+		else if (Flags & Z80_Y_IS_OP1) {
+			i32 YValue := (OpcodeByte & 0b00_111_000) >> 3
+			
+			Buffer := this->DisassembleRegister(Buffer, OperandType, YValue)
+		}
+		else if (Flags & Z80_P_IS_OP1) {
+			i32 PValue := (OpcodeByte & 0b00_110_000) >> 4
+			
+			Buffer := this->DisassembleRegister(Buffer, OperandType, PValue)
+		}
+		
+		return Buffer
+	}
+	
+	define i8* Disassemble(Z80Instruction* Instruction, i8* Opcode) {
+		i8* Disassembly := Alloc(16)
+		i8* Buffer := Disassembly
+		
+		for (i32 NameIndex := 0, NameIndex < Instruction->Name->Length, NameIndex += 1) {
+			Buffer[NameIndex] := Instruction->Name->ASCIICharacterAt(NameIndex)
+		}
+		
+		Buffer += NameIndex
+		
+		i32 LeftOperand := Instruction~>Operands[0]
+		i32 RightOperand := Instruction~>Operands[1]
+		
+		i32 Flags := Instruction->Flags
+		
+		if (LeftOperand != 0) {
+			MoveMemory(Buffer, ", ", 2)
+			Buffer += 2
+			
+			Buffer := this->DisassembleOperand(Buffer, Opcode, LeftOperand, Flags)
+		}
+		
+		if (RightOperand != 0) {
+			MoveMemory(Buffer, ", ", 2)
+			Buffer += 2
+			
+			; Translate all `FIELD_IS_OP2` flags into `FIELD_IS_OP1` so `DisassembleOperand` can handle them corrrectly
+			
+			Flags := (Flags & 0xFF) >> 4 | (Flags & Z80_D_IS_OP2) >> 1 | (Flags & 0xFC00)
+			
+			Buffer := this->DisassembleOperand(Buffer, Opcode, RightOperand, Flags)
+		}
+		
+		return Disassembly
+	}
+	
+	define Z80Instruction* MatchBytesToInstruction(i8* Opcode, i32* OutOffset) {
+		i32 Flags := 0
+		i32 PrefixCount := 0
+		
+		if (Opcode[0] = 0xDD) {
+			Flags |= Z80_PREFIX_DD
+			PrefixCount += 1
+		}
+		else if (Opcode[0] = 0xFD) {
+			Flags |= Z80_PREFIX_FD
+			PrefixCount += 1
+		}
+		
+		if (Opcode[0] = 0xED) {
+			Flags |= Z80_PREFIX_ED
+			PrefixCount += 1
+		}
+		else if (Opcode[PrefixCount] = 0xCB) {
+			Flags |= Z80_PREFIX_CB
+			PrefixCount += 1
+		}
+		
+		i16 OpcodeByte := Opcode[PrefixCount] & 0xFF
+		
+		Print("Flags: %x, Index %x\n", Flags, OpcodeByte)
+		
+		Z80Instruction** OpcodeMap := this->GetOpcodeMap(Flags)
+		
+		Z80Instruction* FoundInstruction := OpcodeMap[OpcodeByte]
+		
+		if (FoundInstruction = null) {
+			Print("Undefined opcode\n")
+		}
+		
+		*OutOffset := PrefixCount
+		
+		return FoundInstruction
+	}
+}
+
+define void Usage(i8* ExtraMessage) {
+	Print("%s\n", ExtraMessage)
+	
+	windows {
+		i8* Extension := "exe"
+	}
+	linux {
+		i8* Extension := "elf"
+	}
+	
+	Print("Usage: Z80.%s assemble AssemblyFile OutputBinaryFile\n", Extension)
+	Print("       Z80.%s disassemble BinaryFile\n", Extension)
 }
 
 define void Main(i64 ArgC, i8** ArgV) {
 	GetArgs(&ArgC, &ArgV)
 	
-	if (ArgC != 3) {
-		Print("not enough args\n")
+	if (ArgC < 3) {	
+		Usage("Not enough arguments\n")
 		return
 	}
 	
-	
-	i64 File := FileOpen(ArgV[1], FILE_READ)
+	i64 File := FileOpen(ArgV[2], FILE_READ)
 	i8* Text := FileReadAll(File)
 	FileClose(File)
 	
+	i8* Verb := ArgV[1]
+	
 	Z80Assembler* Z80 := Z80Assembler:New({i8 file: "./Z80.txt"}, Text)
 	
-	Z80->ParseProgram()
-	Z80->Link()
-	
-	Z80->Print()
-	Z80->WriteToFile(ArgV[2])
+	if (StringEquals(Verb, "assemble")) {
+		if (ArgC != 4) {
+			Usage("Missing OutputBinaryFile argument\n")
+			return
+		}
+		
+		Z80->ParseProgram()
+		Z80->Link()
+		
+		Z80->Print()
+		Z80->WriteToFile(ArgV[3])	
+	}
+	else if (StringEquals(Verb, "disassemble")) {
+		i8* Bytes := {i8: 0xCB 0xE8 0 0}
+		i32 Offset := 0
+		
+		Z80Instruction* Instruction := Z80->MatchBytesToInstruction(Bytes, &Offset)
+		
+		Print("Disassembly: %s\n", Z80->Disassemble(Instruction, Bytes + Offset))
+	}
 }
