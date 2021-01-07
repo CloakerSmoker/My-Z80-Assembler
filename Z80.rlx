@@ -151,6 +151,11 @@ struct Z80InstructionNode {
 
 i32 Z80_MEMORY_SIZE := 0x1_0000
 
+define i8 FindFirstBitSet(i64 Number) asm {
+	bsr, rax, rdi
+	ret
+}
+
 struct Z80Assembler {
 	HashMap Instructions
 	HashMap Registers
@@ -954,17 +959,12 @@ struct Z80Assembler {
 		FileClose(File)
 	}
 	
-	define i8 IsPowerOfTwo(i32 Number) {
-		return Number && !(Number & (Number - 1))
-	}
-	
 	define i8* GetRegisterName(i32 RegisterType, i32 RegisterValue) {
 		i8*{8} R {"b", "c", "d", "e", "h", "l", "(hlb)", "a"}
 		i8*{4} RP {"bc", "de", "hl", "sp"}
 		i8*{4} RPI {"(bc)", "(de)", "(hl)", "(sp)"}
 		i8*{4} RP2 {"bc", "de", "hl", "af"}
 		i8*{4} RP2I {"(bc)", "(de)", "(hl)", "(af)"}
-		
 		
 		if (RegisterType = Z80_R) { return R[RegisterValue] }
 		if (RegisterType = Z80_RP) { return RP[RegisterValue] }
@@ -979,8 +979,21 @@ struct Z80Assembler {
 		if (RegisterType = Z80_IXH) { return "ixh" }
 		if (RegisterType = Z80_IYL) { return "iyl" }
 		if (RegisterType = Z80_IYH) { return "iyh" }
-		if (RegisterType = Z80_IX_DISP) { return "ix+" }
-		if (RegisterType = Z80_IY_DISP) { return "iy+" }
+		
+		i8*{29} AllRegisters {"b", "c", "d", "e", "h", "l", "(hlb)", "a",
+							  "bc", "de", "hl", "sp",
+							  "(bc)", "(de)", "(hl)", "(sp)",
+							  "af", "(af)",
+							  "", "", "",
+							  "i", "r",
+							  "ix", "ix",
+							  "ixl", "ixh", "iyl", "iyh"}
+		
+		if (RegisterValue = -1) {
+			i32 Index := FindFirstBitSet(RegisterType)
+			
+			return AllRegisters[Index]
+		}
 		
 		return null
 	}
@@ -1001,7 +1014,7 @@ struct Z80Assembler {
 		return Buffer + Length
 	}
 	
-	define i8* DisassembleOperand(i8* Buffer, i8* Opcode, i32 OperandType, i32 Flags) {
+	define i8* DisassembleOperand(i8* Buffer, i8* Opcode, i32 OperandType, i32 Flags, i32* InstructionLength) {
 		i8 OpcodeByte := *Opcode
 		
 		if (Flags & Z80_I_IS_OP1) {
@@ -1014,19 +1027,27 @@ struct Z80Assembler {
 				Buffer += StringLength(Buffer)
 				Buffer[0] := ')'
 				Buffer += 1
+				
+				*InstructionLength += 2
 			}
 			else {
 				if (Flags & Z80_HAS_I8) {
 					Buffer := IToA(ImmediateI8, 10, Buffer)
+					
+					*InstructionLength += 1
 				}
 				else {
 					Buffer := IToA(ImmediateI16, 10, Buffer)
+					
+					*InstructionLength += 2
 				}
 				
 				Buffer += StringLength(Buffer)
 			}
 		}
 		else if (Flags & Z80_D_IS_OP1) {
+			*InstructionLength += 1
+			
 			i8 DisplacementValue := Opcode[1]
 			
 			; By default, assume a Z80_PREFIX_DD instruction (aka an instruction that uses `ix` instead of `iy`)
@@ -1072,12 +1093,15 @@ struct Z80Assembler {
 			
 			Buffer := this->DisassembleRegister(Buffer, OperandType, PValue)
 		}
+		else {
+			Buffer := this->DisassembleRegister(Buffer, OperandType, -1)
+		}
 		
 		return Buffer
 	}
 	
-	define i8* Disassemble(Z80Instruction* Instruction, i8* Opcode) {
-		i8* Disassembly := Alloc(16)
+	define i8* Disassemble(Z80Instruction* Instruction, i8* Opcode, i32* OutInstructionLength) {
+		i8* Disassembly := Alloc(26)
 		i8* Buffer := Disassembly
 		
 		for (i32 NameIndex := 0, NameIndex < Instruction->Name->Length, NameIndex += 1) {
@@ -1091,11 +1115,13 @@ struct Z80Assembler {
 		
 		i32 Flags := Instruction->Flags
 		
+		*OutInstructionLength += 1
+		
 		if (LeftOperand != 0) {
 			MoveMemory(Buffer, ", ", 2)
 			Buffer += 2
 			
-			Buffer := this->DisassembleOperand(Buffer, Opcode, LeftOperand, Flags)
+			Buffer := this->DisassembleOperand(Buffer, Opcode, LeftOperand, Flags, OutInstructionLength)
 		}
 		
 		if (RightOperand != 0) {
@@ -1106,7 +1132,7 @@ struct Z80Assembler {
 			
 			Flags := (Flags & 0xFF) >> 4 | (Flags & Z80_D_IS_OP2) >> 1 | (Flags & 0xFC00)
 			
-			Buffer := this->DisassembleOperand(Buffer, Opcode, RightOperand, Flags)
+			Buffer := this->DisassembleOperand(Buffer, Opcode, RightOperand, Flags, OutInstructionLength)
 		}
 		
 		return Disassembly
@@ -1136,17 +1162,17 @@ struct Z80Assembler {
 		
 		i16 OpcodeByte := Opcode[PrefixCount] & 0xFF
 		
-		Print("Flags: %x, Index %x\n", Flags, OpcodeByte)
+		;Print("Flags: %x, Index %x\n", Flags, OpcodeByte)
 		
 		Z80Instruction** OpcodeMap := this->GetOpcodeMap(Flags)
 		
 		Z80Instruction* FoundInstruction := OpcodeMap[OpcodeByte]
 		
 		if (FoundInstruction = null) {
-			Print("Undefined opcode\n")
+			*OutOffset += 1
 		}
 		
-		*OutOffset := PrefixCount
+		*OutOffset += PrefixCount
 		
 		return FoundInstruction
 	}
@@ -1163,7 +1189,7 @@ define void Usage(i8* ExtraMessage) {
 	}
 	
 	Print("Usage: Z80.%s assemble AssemblyFile OutputBinaryFile\n", Extension)
-	Print("       Z80.%s disassemble BinaryFile\n", Extension)
+	Print("       Z80.%s disassemble BinaryFile [StartOffset] [EndOffset]\n", Extension)
 }
 
 define void Main(i64 ArgC, i8** ArgV) {
@@ -1176,6 +1202,7 @@ define void Main(i64 ArgC, i8** ArgV) {
 	
 	i64 File := FileOpen(ArgV[2], FILE_READ)
 	i8* Text := FileReadAll(File)
+	i32 Length := FileGetSize(File)
 	FileClose(File)
 	
 	i8* Verb := ArgV[1]
@@ -1195,11 +1222,35 @@ define void Main(i64 ArgC, i8** ArgV) {
 		Z80->WriteToFile(ArgV[3])	
 	}
 	else if (StringEquals(Verb, "disassemble")) {
-		i8* Bytes := {i8: 0xCB 0xE8 0 0}
+		i8* Bytes := Text
 		i32 Offset := 0
 		
-		Z80Instruction* Instruction := Z80->MatchBytesToInstruction(Bytes, &Offset)
+		if (ArgC > 4) {
+			Offset := AToI(ArgV[3]) As i32
+		}
+		if (ArgV > 5) {
+			i32 NewLength := AToI(ArgV[4]) As i32
+			
+			if (NewLength < Length) {
+				Length := NewLength
+			}
+		}
 		
-		Print("Disassembly: %s\n", Z80->Disassemble(Instruction, Bytes + Offset))
+		while (Offset < Length) {
+			i32 InnerOffset := 0
+			
+			Z80Instruction* Instruction := Z80->MatchBytesToInstruction(Bytes + Offset, &InnerOffset)
+			
+			if (Instruction = null) {
+				for (i32 Index := 0, Index < InnerOffset, Index += 1) {
+					Print("!db %x\n", Bytes[Offset + Index])
+				}
+			}
+			else {
+				Print("%s\n", Z80->Disassemble(Instruction, Bytes + Offset + InnerOffset, &InnerOffset))
+			}
+			
+			Offset += InnerOffset
+		}
 	}
 }
