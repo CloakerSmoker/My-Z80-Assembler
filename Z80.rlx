@@ -169,6 +169,7 @@ struct Z80Assembler {
 	declare void LoadInstructions(i8*)
 	
 	i32 MemoryIndex
+	i32 CurrentAddress
 	
 	union {
 		void* Memory
@@ -599,7 +600,7 @@ struct Z80Assembler {
 		}
 		
 		if !(Find) {
-			this->LabelPositions[Index] := this->MemoryIndex As i16
+			this->LabelPositions[Index] := this->CurrentAddress As i16
 		}
 		
 		return Index
@@ -754,7 +755,9 @@ struct Z80Assembler {
 				SafeWideString* DirectiveName := DirectiveNameToken->StringValue
 				i8 IsFirstInlineValue := true
 				
-				if (DirectiveName->Equals("org")) {
+				i8 IsBase := DirectiveName->Equals("base")
+				
+				if (DirectiveName->Equals("org") || IsBase) {
 					Token* NewMemoryIndexToken := this->Lexer->Consume(TOKEN_TYPE_INTEGER, "Expected new org address")
 					i32 NewMemoryIndex := NewMemoryIndexToken->IntegerValue As i32
 					
@@ -762,7 +765,11 @@ struct Z80Assembler {
 						NewMemoryIndexToken->Error("Org address out of bounds")
 					}
 					
-					this->MemoryIndex := NewMemoryIndex
+					if !(IsBase) {
+						this->MemoryIndex := NewMemoryIndex
+					}
+					
+					this->CurrentAddress := NewMemoryIndex
 				}
 				else if (DirectiveName->Equals("db")) {
 					while (IsFirstInlineValue || this->Lexer->NextTokenMatches(TOKEN_TYPE_PUNCTUATION, PUNCTUATION_COMMA)) {
@@ -844,6 +851,8 @@ struct Z80Assembler {
 	
 	define void AppendI8(i32 Value) {
 		this->EnsureCapacity()
+		
+		this->CurrentAddress += 1
 		
 		this->MemoryBytes[this->MemoryIndex] := (Value & 0xFF) As i8
 		this->MemoryIndex += 1
@@ -936,6 +945,8 @@ struct Z80Assembler {
 			
 			i32 TargetLabelPosition := this->LabelPositions[TargetLabelIndex]
 			
+			;Print("Reference to %i from %x resolves to %x\n", TargetLabelIndex, TargetPosition, TargetLabelPosition)
+			
 			if (TargetLabelPosition = 0x7FFF) {
 				this->LabelReferenceBlameTokens[TargetLabelIndex]->Error("Label not found")
 			}
@@ -960,7 +971,7 @@ struct Z80Assembler {
 	define void WriteToFile(i8* FilePath) {
 		i64 File := FileOpen(FilePath, FILE_WRITE | FILE_CREATE_NEW)
 		
-		FileWrite(File, this->Memory, Z80_MEMORY_SIZE)
+		FileWrite(File, this->Memory, this->MemoryIndex)
 		
 		FileClose(File)
 	}
