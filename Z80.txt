@@ -1,10 +1,22 @@
 ; name	x,z,y
 ; name 	x,z,q,p
 
-; General instructionss
+; General instructions
 
 nop 		0+0+0 		_ 			_
 ex			0+0+1		af,af		_
+
+; Relative jumps
+
+dnjz		0+0+2		i8			I_IS_OP1|IMM8|RELATIVE
+jr			0+0+3		i8			I_IS_OP1|IMM8|RELATIVE
+
+jrnz		0+0+4		i8			I_IS_OP1|IMM8|RELATIVE
+jrz			0+0+5		i8			I_IS_OP1|IMM8|RELATIVE
+jrnc		0+0+6		i8			I_IS_OP1|IMM8|RELATIVE
+jrc			0+0+7		i8			I_IS_OP1|IMM8|RELATIVE
+
+; Continued general instructions
 
 ld			0+1+0+_		rp,i16		P_IS_OP1|I_IS_OP2|IMM16
 add			0+1+1+_		hl,rp		P_IS_OP2

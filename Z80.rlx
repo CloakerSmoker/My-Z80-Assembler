@@ -89,6 +89,10 @@ i32 Z80_PREFIX_CB := 0x2000
 i32 Z80_PREFIX_DD := 0x4000
 i32 Z80_PREFIX_FD := 0x8000
 
+; Flag for relative jumps
+
+i32 Z80_IS_RELATIVE := 0x10000
+
 ; Instruction definition, holds the operand types/opcode/flags which define a single actual instruction
 
 struct Z80Instruction {
@@ -327,6 +331,8 @@ struct Z80Assembler {
 		M->Set("CB", Z80_PREFIX_CB)
 		M->Set("DD", Z80_PREFIX_DD)
 		M->Set("FD", Z80_PREFIX_FD)
+		
+		M->Set("RELATIVE", Z80_IS_RELATIVE)
 	}
 	
 	define i16 PackOpcode(i16 X, i16 Y, i16 Z) {
@@ -1014,12 +1020,12 @@ struct Z80Assembler {
 		return Buffer + Length
 	}
 	
-	define i8* DisassembleOperand(i8* Buffer, i8* Opcode, i32 OperandType, i32 Flags, i32* InstructionLength) {
+	define i8* DisassembleOperand(i32 Offset, i8* Buffer, i8* Opcode, i32 OperandType, i32 Flags, i32* InstructionLength) {
 		i8 OpcodeByte := *Opcode
 		
 		if (Flags & Z80_I_IS_OP1) {
-			i32 ImmediateI8 := Opcode[1]
-			i32 ImmediateI16 := *(Opcode + 1 As i16*)
+			i32 ImmediateI8 := Opcode[1] & 0xFF
+			i32 ImmediateI16 := *(Opcode + 1 As i16*) & 0xFFFF
 			
 			if (OperandType & Z80_I16I) {
 				Buffer[0] := '('
@@ -1031,15 +1037,24 @@ struct Z80Assembler {
 				*InstructionLength += 2
 			}
 			else {
-				if (Flags & Z80_HAS_I8) {
-					Buffer := IToA(ImmediateI8, 10, Buffer)
-					
-					*InstructionLength += 1
+				*InstructionLength += 1
+	
+				if (Flags & Z80_HAS_I8) {	
+					if (Flags & Z80_IS_RELATIVE) {
+						i32 EffectiveAddress := (Offset + ImmediateI8) & 0xFFFF
+						
+						EffectiveAddress += *InstructionLength
+						
+						Buffer := IToA(EffectiveAddress, 16, Buffer)
+					}
+					else {
+						Buffer := IToA(ImmediateI8, 16, Buffer)
+					}
 				}
 				else {
-					Buffer := IToA(ImmediateI16, 10, Buffer)
+					Buffer := IToA(ImmediateI16, 16, Buffer)
 					
-					*InstructionLength += 2
+					*InstructionLength += 1
 				}
 				
 				Buffer += StringLength(Buffer)
@@ -1100,7 +1115,7 @@ struct Z80Assembler {
 		return Buffer
 	}
 	
-	define i8* Disassemble(Z80Instruction* Instruction, i8* Opcode, i32* OutInstructionLength) {
+	define i8* Disassemble(i32 Offset, Z80Instruction* Instruction, i8* Opcode, i32* OutInstructionLength) {
 		i8* Disassembly := Alloc(26)
 		i8* Buffer := Disassembly
 		
@@ -1121,7 +1136,7 @@ struct Z80Assembler {
 			MoveMemory(Buffer, ", ", 2)
 			Buffer += 2
 			
-			Buffer := this->DisassembleOperand(Buffer, Opcode, LeftOperand, Flags, OutInstructionLength)
+			Buffer := this->DisassembleOperand(Offset, Buffer, Opcode, LeftOperand, Flags, OutInstructionLength)
 		}
 		
 		if (RightOperand != 0) {
@@ -1132,7 +1147,7 @@ struct Z80Assembler {
 			
 			Flags := (Flags & 0xFF) >> 4 | (Flags & Z80_D_IS_OP2) >> 1 | (Flags & 0xFC00)
 			
-			Buffer := this->DisassembleOperand(Buffer, Opcode, RightOperand, Flags, OutInstructionLength)
+			Buffer := this->DisassembleOperand(Offset, Buffer, Opcode, RightOperand, Flags, OutInstructionLength)
 		}
 		
 		return Disassembly
@@ -1168,7 +1183,7 @@ struct Z80Assembler {
 		
 		Z80Instruction* FoundInstruction := OpcodeMap[OpcodeByte]
 		
-		if (FoundInstruction = null) {
+		if (FoundInstruction = null && PrefixCount = 0) {
 			*OutOffset += 1
 		}
 		
@@ -1225,10 +1240,10 @@ define void Main(i64 ArgC, i8** ArgV) {
 		i8* Bytes := Text
 		i32 Offset := 0
 		
-		if (ArgC > 4) {
+		if (ArgC >= 4) {
 			Offset := AToI(ArgV[3]) As i32
 		}
-		if (ArgV > 5) {
+		if (ArgC >= 5) {
 			i32 NewLength := AToI(ArgV[4]) As i32
 			
 			if (NewLength < Length) {
@@ -1236,18 +1251,26 @@ define void Main(i64 ArgC, i8** ArgV) {
 			}
 		}
 		
+		i8* OffsetString := Alloc(8)
+		
 		while (Offset < Length) {
+			IToA(Offset, 16, OffsetString, false)
+			
+			for (i32 Padding := StringLength(OffsetString), Padding < 4, Padding += 1) {
+				Print("0")
+			}
+			
+			Print("%s: ", OffsetString)
+			
 			i32 InnerOffset := 0
 			
 			Z80Instruction* Instruction := Z80->MatchBytesToInstruction(Bytes + Offset, &InnerOffset)
 			
 			if (Instruction = null) {
-				for (i32 Index := 0, Index < InnerOffset, Index += 1) {
-					Print("!db %x\n", Bytes[Offset + Index])
-				}
+				Print("!db %x\n", Bytes[Offset] & 0xFF)
 			}
 			else {
-				Print("%s\n", Z80->Disassemble(Instruction, Bytes + Offset + InnerOffset, &InnerOffset))
+				Print("%s\n", Z80->Disassemble(Offset, Instruction, Bytes + Offset + InnerOffset, &InnerOffset))
 			}
 			
 			Offset += InnerOffset
