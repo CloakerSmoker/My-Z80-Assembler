@@ -39,12 +39,12 @@ dec 		0+5+_		r			Y_IS_OP1
 
 ld			0+6+_		r,i8		Y_IS_OP1|I_IS_OP2|IMM8
 
-rlca		0+7+0		_			_
-rrca		0+7+1		_			_
-rla			0+7+2		_			_
-rra			0+7+3		_			_
-daa			0+7+4		_			_
-cpl			0+7+5		_			_
+rlca		0+7+0		a			_
+rrca		0+7+1		a			_
+rla			0+7+2		a			_
+rra			0+7+3		a			_
+daa			0+7+4		a			_
+cpl			0+7+5		a			_
 scf			0+7+6		_			_
 ccf			0+7+7		_			_
 
@@ -86,8 +86,8 @@ jpp 		3+2+6		i16			I_IS_OP1|IMM16
 jpm			3+2+7		i16			I_IS_OP1|IMM16
 
 jp 			3+3+0		i16			I_IS_OP1|IMM16
-out			3+3+2		i16i,a		I_IS_OP1|IMM16
-in			3+3+3		a,i16i		I_IS_OP2|IMM16
+out			3+3+2		i8,a		I_IS_OP1|IMM8
+in			3+3+3		a,i8		I_IS_OP2|IMM8
 ex			3+3+4		spi,hl		_
 ex			3+3+5		de,hl		_
 di			3+3+6		_			_

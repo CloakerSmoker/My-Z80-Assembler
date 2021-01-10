@@ -198,7 +198,7 @@ struct Z80Assembler {
 	static Z80Assembler* New(i8* InstructionListing, i8* SourceText) {
 		Z80Assembler* this := Alloc(#Z80Assembler)
 		
-		i32 OpcodeMapSize := 0xFF * #Z80Instruction*
+		i32 OpcodeMapSize := 0x100 * #Z80Instruction*
 		
 		this->NoPrefixInstructions := Alloc(OpcodeMapSize)
 		this->EDInstructions := Alloc(OpcodeMapSize)
@@ -579,6 +579,9 @@ struct Z80Assembler {
 		
 		HashMapElement* LabelElement := this->LabelNameToIndex->Get(LabelNameToken->StringValue)
 		
+		;LabelNameToken->Warn("FOAL")
+		;Print("Find? %i\n", Find)
+		
 		if (LabelElement != null) {
 			Index := LabelElement->Value As i32
 			
@@ -589,9 +592,9 @@ struct Z80Assembler {
 			}
 		}
 		else {
-			this->LabelPositionCount += 1
+			this->LabelPositionCount := Index + 1
 			this->LabelPositions := ReAlloc(this->LabelPositions, this->LabelPositionCount * #i16)
-			this->LabelReferenceBlameTokens := ReAlloc(this->LabelReferenceBlameTokens, this->LabelPositionCount * #i16)
+			this->LabelReferenceBlameTokens := ReAlloc(this->LabelReferenceBlameTokens, this->LabelPositionCount * #Token*)
 			
 			this->LabelNameToIndex->Set(LabelNameToken->StringValue, Index)
 			
@@ -600,8 +603,12 @@ struct Z80Assembler {
 		}
 		
 		if !(Find) {
+			;Print("Set[%i] @ %x\n", Index, this->CurrentAddress)
+			
 			this->LabelPositions[Index] := this->CurrentAddress As i16
 		}
+		
+		;Print("Ret[%i]\n", Index)
 		
 		return Index
 	}
@@ -875,7 +882,7 @@ struct Z80Assembler {
 		i32 Index := this->LabelReferenceCount
 		
 		this->LabelReferenceCount += 1
-		this->LabelReferences := ReAlloc(this->LabelReferences, this->LabelReferenceCount * #i32)
+		this->LabelReferences := ReAlloc(this->LabelReferences, this->LabelReferenceCount * 8)
 		
 		this->LabelReferences[Index] := (LabelNumber << 16) | this->MemoryIndex
 	}
@@ -1245,7 +1252,9 @@ define void Main(i64 ArgC, i8** ArgV) {
 		Z80->Link()
 		
 		Z80->Print()
-		Z80->WriteToFile(ArgV[3])	
+		Z80->WriteToFile(ArgV[3])
+		
+		Print("Wrote %i (%x) bytes\n", Z80->MemoryIndex, Z80->MemoryIndex)
 	}
 	else if (StringEquals(Verb, "disassemble")) {
 		i8* Bytes := Text
